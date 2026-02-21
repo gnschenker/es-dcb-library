@@ -107,19 +107,19 @@ U-05 + U-06 + U-07 + U-08 + U-09 must all be done before:
 
 | ID | Title | Status | Claimed by |
 |----|-------|--------|------------|
-| U-01 | Project Scaffolding | `pending` | — |
-| U-02 | Domain Foundation — Event Types & Errors | `pending` | — |
-| U-03 | Domain Utilities — IDs, Streams, Store Factory | `pending` | — |
-| U-04 | Domain Reducers | `pending` | — |
-| U-05 | Teacher Commands | `pending` | — |
-| U-06 | Course Lifecycle Commands | `pending` | — |
-| U-07 | Course Teacher Assignment Commands | `pending` | — |
-| U-08 | Student Registration Command | `pending` | — |
-| U-09 | Enrollment Commands | `pending` | — |
-| U-10 | Unit Tests — Reducers & Business Rules | `pending` | — |
-| U-11 | Integration Test Infrastructure | `pending` | — |
-| U-12 | Command Integration Tests | `pending` | — |
-| U-13 | API Server & Routes | `pending` | — |
+| U-01 | Project Scaffolding | `done` | — |
+| U-02 | Domain Foundation — Event Types & Errors | `done` | — |
+| U-03 | Domain Utilities — IDs, Streams, Store Factory | `done` | — |
+| U-04 | Domain Reducers | `done` | — |
+| U-05 | Teacher Commands | `done` | — |
+| U-06 | Course Lifecycle Commands | `done` | — |
+| U-07 | Course Teacher Assignment Commands | `done` | — |
+| U-08 | Student Registration Command | `done` | — |
+| U-09 | Enrollment Commands | `done` | — |
+| U-10 | Unit Tests — Reducers & Business Rules | `done` | — |
+| U-11 | Integration Test Infrastructure | `done` | — |
+| U-12 | Command Integration Tests | `done` | — |
+| U-13 | API Server & Routes | `done` | — |
 
 ---
 
