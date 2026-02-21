@@ -351,6 +351,134 @@ src/
 tests/
   unit/                 Pure unit tests — no database
   integration/          Tests against a real PostgreSQL instance
+
+university-app/         Full example application (see below)
+```
+
+---
+
+## Example Application — University Course Management
+
+`university-app/` is a complete reference implementation built on top of `es-dcb-library`. It models a university course management system and demonstrates how DCB event sourcing handles real-world business rules without aggregates.
+
+### What it models
+
+| Domain concept | Description |
+|---|---|
+| **Teacher** | Hired and dismissed. Cannot be dismissed while assigned to an open course (BR-T4). |
+| **Course** | Lifecycle: draft → open → closed / cancelled. Requires an assigned teacher to publish. |
+| **Student** | Registered with a deterministic ID derived from email (UUID v5). |
+| **Enrollment** | Students enroll in open courses, subject to capacity and prerequisite checks. Drop or withdraw before deadlines; graded by the course teacher when complete. |
+
+Business rules span what would traditionally be multiple aggregates — for example, enrolling a student requires loading the student's completed-course history, the course's current enrollment count, and the student's existing enrollment state simultaneously. DCB handles this naturally: each command defines its own query context at runtime.
+
+### Architecture
+
+The app follows a **vertical slice** pattern — each command handler (`hire-teacher.ts`, `enroll-student.ts`, etc.) defines its own private stream queries and exported reducer functions. No shared state, no cross-slice imports. The Fastify HTTP layer is a thin wrapper that delegates entirely to the command handlers.
+
+```
+university-app/src/
+  commands/          12 command handlers (one file per use-case)
+  domain/            Event payload types, error classes, ID derivation, clock
+  api/
+    routes/          Fastify route registration (teachers, courses, students)
+    middleware/      Error-to-HTTP-status mapping
+  server.ts          Fastify factory (testable — accepts EventStore interface)
+  index.ts           Entry point (DATABASE_URL, PORT from environment)
+```
+
+### Running with Docker Compose
+
+The easiest way to run the university app is with Docker Compose, which starts PostgreSQL and the application together:
+
+```bash
+docker compose up --build
+```
+
+The API is then available at `http://localhost:3000/api/v1`.
+
+### Manual smoke test
+
+```bash
+# Hire a teacher
+curl -s -X POST http://localhost:3000/api/v1/teachers \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"Dr. Smith","email":"smith@uni.edu","department":"CS"}' | jq .
+
+# Create a course (use the teacherId from above)
+curl -s -X POST http://localhost:3000/api/v1/courses \
+  -H 'Content-Type: application/json' \
+  -d '{"title":"Intro CS","semester":"Fall 2026","creditHours":3,"maxStudents":30,
+       "prerequisites":[],"dropDeadline":"2026-09-15","withdrawalDeadline":"2026-10-15"}' | jq .
+
+# Assign the teacher (replace :courseId and :teacherId)
+curl -s -X PUT http://localhost:3000/api/v1/courses/:courseId/teacher \
+  -H 'Content-Type: application/json' \
+  -d '{"teacherId":":teacherId"}' | jq .
+
+# Publish the course
+curl -s -X POST http://localhost:3000/api/v1/courses/:courseId/publish | jq .
+
+# Register a student
+curl -s -X POST http://localhost:3000/api/v1/students \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"Alice","email":"alice@uni.edu","dateOfBirth":"2000-01-01"}' | jq .
+
+# Enroll the student (replace :studentId)
+curl -s -X POST http://localhost:3000/api/v1/courses/:courseId/enrollments \
+  -H 'Content-Type: application/json' \
+  -d '{"studentId":":studentId"}' | jq .
+
+# Grade the student
+curl -s -X POST http://localhost:3000/api/v1/courses/:courseId/enrollments/:studentId/grade \
+  -H 'Content-Type: application/json' \
+  -d '{"grade":88,"gradedBy":":teacherId"}' | jq .
+
+# Check the student's course history
+curl -s http://localhost:3000/api/v1/students/:studentId/courses | jq .
+```
+
+### Running locally (without Docker)
+
+```bash
+# From the repo root
+cd university-app
+npm install
+npm run build
+
+DATABASE_URL=postgres://user:pass@localhost:5432/university \
+  npm start
+```
+
+### API routes
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/api/v1/teachers` | Hire a teacher |
+| `POST` | `/api/v1/teachers/:id/dismiss` | Dismiss a teacher |
+| `GET`  | `/api/v1/teachers/:id` | Get teacher state |
+| `POST` | `/api/v1/courses` | Create a course |
+| `PUT`  | `/api/v1/courses/:id/teacher` | Assign a teacher |
+| `DELETE` | `/api/v1/courses/:id/teacher` | Remove the teacher |
+| `POST` | `/api/v1/courses/:id/publish` | Publish a course |
+| `POST` | `/api/v1/courses/:id/close` | Close a course |
+| `POST` | `/api/v1/courses/:id/cancel` | Cancel a course |
+| `GET`  | `/api/v1/courses/:id` | Get course state |
+| `GET`  | `/api/v1/courses/:id/enrollments` | List enrollments |
+| `POST` | `/api/v1/courses/:id/enrollments` | Enroll a student |
+| `POST` | `/api/v1/courses/:id/enrollments/:studentId/unenroll` | Drop or withdraw |
+| `POST` | `/api/v1/courses/:id/enrollments/:studentId/grade` | Grade a student |
+| `POST` | `/api/v1/students` | Register a student |
+| `GET`  | `/api/v1/students/:id` | Get student state |
+| `GET`  | `/api/v1/students/:id/courses` | Get enrollment history |
+
+### Tests
+
+```bash
+cd university-app
+
+npm run test:unit          # 194 pure unit tests — no database needed
+npm run test:integration   # 45 integration tests — spins up PostgreSQL via testcontainers
 ```
 
 ---

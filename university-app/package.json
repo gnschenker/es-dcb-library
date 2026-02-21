@@ -6,6 +6,8 @@
     "node": ">=18"
   },
   "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "start": "node dist/src/index.js",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:unit": "vitest run --project unit",

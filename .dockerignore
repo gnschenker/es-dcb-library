@@ -1,0 +1,10 @@
+node_modules
+dist
+university-app/node_modules
+university-app/dist
+university-app/tests
+.git
+.github
+*.md
+.docs
+coverage
