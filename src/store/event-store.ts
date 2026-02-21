@@ -2,7 +2,7 @@ import pg from 'pg';
 import type { QueryDefinition } from '../query/types.js';
 import type { NewEvent, StoredEvent, LoadResult, AppendOptions, StreamOptions, EventStore } from '../types.js';
 import { EventStoreError } from '../errors.js';
-import { compileLoadQuery } from '../query/compiler.js';
+import { compileLoadQuery, compileStreamQuery } from '../query/compiler.js';
 import { applySchema } from './schema.js';
 import { mapRow } from './row-mapper.js';
 
@@ -82,8 +82,27 @@ export class PostgresEventStore implements EventStore {
     }
   }
 
-  async *stream(_query: QueryDefinition, _options?: StreamOptions): AsyncGenerator<StoredEvent> {
-    throw new Error('not implemented');
+  async *stream(query: QueryDefinition, options: StreamOptions = {}): AsyncGenerator<StoredEvent> {
+    const batchSize = options.batchSize ?? 100;
+    let lastPosition = options.afterPosition ?? 0n;
+
+    while (true) {
+      const { sql, params } = compileStreamQuery(query, lastPosition, batchSize);
+      let result: pg.QueryResult;
+      try {
+        result = await this.pool.query(sql, params as unknown[]);
+      } catch (err) {
+        throw new EventStoreError(`Failed to stream events: ${String(err)}`, err);
+      }
+
+      for (const row of result.rows) {
+        const event = mapRow(row);
+        yield event;
+        lastPosition = event.globalPosition;
+      }
+
+      if (result.rowCount === null || result.rowCount < batchSize) break;
+    }
   }
 
   async close(): Promise<void> {

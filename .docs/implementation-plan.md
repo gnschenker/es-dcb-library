@@ -1068,8 +1068,8 @@ Use a mock client that records all SQL calls in order.
 
 ### T-12 — Event Store — `stream()`
 
-**Status:** `pending`
-**Claimed by:** —
+**Status:** `in implementation`
+**Claimed by:** T-12-agent
 **Depends on:** T-09
 **Blocks:** T-13
 
