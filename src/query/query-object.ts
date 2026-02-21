@@ -14,7 +14,8 @@ export const query = {
   eventsOfType(type: string): ClauseBuilder {
     return new ClauseBuilder([{ type, filter: null }]);
   },
+  /** Alias for eventsOfType — delegates to avoid duplication. */
   allEventsOfType(type: string): ClauseBuilder {
-    return new ClauseBuilder([{ type, filter: null }]);
+    return query.eventsOfType(type);
   },
 };

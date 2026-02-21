@@ -13,6 +13,7 @@ function _applyFilter(
   if (clauses.length === 0) {
     throw new Error('_applyFilter called with empty clauses array');
   }
+  // Safe: length guard above ensures the element exists; cast needed for noUncheckedIndexedAccess
   const last = clauses[clauses.length - 1] as Clause;
   const rest = clauses.slice(0, -1);
 

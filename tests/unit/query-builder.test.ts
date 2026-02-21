@@ -16,7 +16,6 @@ describe('Query Builder', () => {
     it('query.eventsOfType creates a single clause with the given type and null filter', () => {
       const qd = query.eventsOfType('OrderCreated');
       expect(qd._clauses).toHaveLength(1);
-      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
       expect(qd._clauses[0]!.type).toBe('OrderCreated');
       expect(qd._clauses[0]!.filter).toBeNull();
     });
