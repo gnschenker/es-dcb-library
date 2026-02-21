@@ -506,7 +506,7 @@ LIMIT $M
 
 ### T-05 — Core Types & Errors
 
-**Status:** `pending`
+**Status:** `done`
 **Claimed by:** —
 **Depends on:** T-01
 **Blocks:** T-07, T-09
