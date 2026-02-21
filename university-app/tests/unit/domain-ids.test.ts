@@ -26,6 +26,10 @@ describe('studentIdFromEmail', () => {
     expect(studentIdFromEmail('Bob@SCHOOL.EDU')).toBe(studentIdFromEmail('bob@school.edu'));
   });
 
+  it('trims whitespace', () => {
+    expect(studentIdFromEmail('  bob@school.edu  ')).toBe(studentIdFromEmail('bob@school.edu'));
+  });
+
   it('is deterministic', () => {
     const id1 = studentIdFromEmail('student@uni.edu');
     const id2 = studentIdFromEmail('student@uni.edu');
