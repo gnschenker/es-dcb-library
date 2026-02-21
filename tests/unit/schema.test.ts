@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   DDL_CREATE_TABLE,
   DDL_CREATE_GIN_INDEX,
@@ -6,6 +6,7 @@ import {
   DDL_CREATE_TYPE_POSITION_INDEX,
   DDL_CREATE_BRIN_INDEX,
   DDL_TUNE_AUTOVACUUM,
+  applySchema,
 } from '../../src/store/schema.js';
 
 // Combine all DDL for full-text searches
@@ -131,5 +132,31 @@ describe('idx_events_type absence', () => {
     // idx_events_type_position is fine; the standalone idx_events_type must not exist
     const withoutTypePosition = ALL_DDL.replace(/idx_events_type_position/g, '');
     expect(withoutTypePosition).not.toContain('idx_events_type');
+  });
+});
+
+describe('applySchema()', () => {
+  it('calls client.query exactly 6 times', async () => {
+    const mockQuery = vi.fn().mockResolvedValue({ rows: [], rowCount: 0 });
+    const mockClient = { query: mockQuery } as unknown as Parameters<typeof applySchema>[0];
+    await applySchema(mockClient);
+    expect(mockQuery).toHaveBeenCalledTimes(6);
+  });
+
+  it('executes DDL statements in the correct order', async () => {
+    const calls: string[] = [];
+    const mockClient = {
+      query: vi.fn().mockImplementation((sql: string) => {
+        calls.push(sql);
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }),
+    } as unknown as Parameters<typeof applySchema>[0];
+    await applySchema(mockClient);
+    expect(calls[0]).toBe(DDL_CREATE_TABLE);
+    expect(calls[1]).toBe(DDL_CREATE_GIN_INDEX);
+    expect(calls[2]).toBe(DDL_TUNE_GIN_INDEX);
+    expect(calls[3]).toBe(DDL_CREATE_TYPE_POSITION_INDEX);
+    expect(calls[4]).toBe(DDL_CREATE_BRIN_INDEX);
+    expect(calls[5]).toBe(DDL_TUNE_AUTOVACUUM);
   });
 });
