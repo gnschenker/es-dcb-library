@@ -113,7 +113,7 @@ T-09 + T-10 + T-11 + T-12 must be done before:
 |----|-------|--------|------------|
 | T-01 | Project Scaffolding | `done` | — |
 | T-02 | Query Internal Types | `done` | — |
-| T-03 | Query Builder | `in implementation` | T-03-agent |
+| T-03 | Query Builder | `done` | — |
 | T-04 | Query Compiler | `pending` | — |
 | T-05 | Core Types & Errors | `pending` | — |
 | T-06 | Database Schema DDL | `done` | — |
@@ -254,8 +254,8 @@ All assertions must be validated by `npm run typecheck` with `strict: true`.
 
 ### T-03 — Query Builder
 
-**Status:** `in implementation`
-**Claimed by:** T-03-agent
+**Status:** `done`
+**Claimed by:** —
 **Depends on:** T-02
 **Blocks:** T-04
 
