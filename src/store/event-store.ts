@@ -1,10 +1,10 @@
-import pg from 'pg';
-import type { QueryDefinition } from '../query/types.js';
-import type { NewEvent, StoredEvent, LoadResult, AppendOptions, StreamOptions, EventStore } from '../types.js';
-import { EventStoreError } from '../errors.js';
-import { compileLoadQuery } from '../query/compiler.js';
-import { applySchema } from './schema.js';
-import { mapRow } from './row-mapper.js';
+import pg from "pg";
+import type { QueryDefinition } from "../query/types.js";
+import type { NewEvent, StoredEvent, LoadResult, AppendOptions, StreamOptions, EventStore } from "../types.js";
+import { EventStoreError } from "../errors.js";
+import { compileLoadQuery, compileStreamQuery } from "../query/compiler.js";
+import { applySchema } from "./schema.js";
+import { mapRow } from "./row-mapper.js";
 
 export interface EventStoreConfig {
   pool: pg.Pool;
@@ -48,7 +48,7 @@ export class PostgresEventStore implements EventStore {
     const eventList = Array.isArray(events) ? events : [events];
     const client = await this.pool.connect();
     try {
-      await client.query('BEGIN');
+      await client.query("BEGIN");
       const stored: StoredEvent[] = [];
       for (const event of eventList) {
         const sql = `INSERT INTO events (type, payload, metadata)
@@ -63,17 +63,17 @@ export class PostgresEventStore implements EventStore {
         try {
           result = await client.query(sql, params);
         } catch (err) {
-          await client.query('ROLLBACK');
+          await client.query("ROLLBACK");
           throw new EventStoreError(`Failed to append event: ${String(err)}`, err);
         }
         stored.push(mapRow(result.rows[0]!));
       }
-      await client.query('COMMIT');
+      await client.query("COMMIT");
       return stored;
     } catch (err) {
-      // If we haven't already rolled back (non-EventStoreError path)
+      // If we have not already rolled back (non-EventStoreError path)
       if (!(err instanceof EventStoreError)) {
-        await client.query('ROLLBACK').catch(() => undefined);
+        await client.query("ROLLBACK").catch(() => undefined);
         throw new EventStoreError(`Failed to append events: ${String(err)}`, err);
       }
       throw err;
@@ -82,8 +82,27 @@ export class PostgresEventStore implements EventStore {
     }
   }
 
-  async *stream(_query: QueryDefinition, _options?: StreamOptions): AsyncGenerator<StoredEvent> {
-    throw new Error('not implemented');
+  async *stream(query: QueryDefinition, options: StreamOptions = {}): AsyncGenerator<StoredEvent> {
+    const batchSize = options.batchSize ?? 100;
+    let lastPosition = options.afterPosition ?? 0n;
+
+    while (true) {
+      const { sql, params } = compileStreamQuery(query, lastPosition, batchSize);
+      let result: pg.QueryResult;
+      try {
+        result = await this.pool.query(sql, params as unknown[]);
+      } catch (err) {
+        throw new EventStoreError(`Failed to stream events: ${String(err)}`, err);
+      }
+
+      for (const row of result.rows) {
+        const event = mapRow(row);
+        yield event;
+        lastPosition = event.globalPosition;
+      }
+
+      if (result.rowCount === null || result.rowCount < batchSize) break;
+    }
   }
 
   async close(): Promise<void> {
