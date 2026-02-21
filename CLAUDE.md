@@ -214,6 +214,44 @@ git checkout main && git pull
 
 ---
 
+---
+
+## University Example App (`university-app/`)
+
+The `university-app/` subdirectory is an example application built on top of this library. It follows a **vertical slice architecture**.
+
+### Architectural principle: autonomous slices
+
+Every feature (API endpoint → command handler → events) is a **self-contained slice**. Slices do not import from each other.
+
+**Shared across slices (OK):**
+- `es-dcb-library` — the underlying event-store library
+- `src/domain/events.ts` — event payload type interfaces (the inter-slice contract)
+- `src/domain/errors.ts` — domain error classes (used by the API error handler)
+- `src/domain/clock.ts` — `Clock` interface and `systemClock` (pure utility)
+- `src/domain/ids.ts` — deterministic ID generators (pure utility)
+- `src/store.ts` — `createStore` factory (infrastructure)
+
+**Defined inside each slice (never shared):**
+- Stream query builders (`query.eventsOfType(...)`) — every command handler defines its own
+- Reducer functions — every command handler contains its own state-reduction logic
+- Any business-rule helpers specific to that command
+
+This means intentional duplication is acceptable and expected. Two command handlers that both need to reduce teacher state each define their own `reduceTeacher` function locally. The coupling that shared code introduces is worse than the duplication.
+
+### Commands per task
+
+For the university app, the Git flow follows `.docs/university-implementation-plan.md`, using `task/U-XX-*` branch names and `feat: U-XX <description>` PR titles.
+
+```bash
+# From university-app/
+npm run typecheck
+npm run test:unit
+npm run test:integration
+```
+
+---
+
 ## Reference Docs
 
 All design documents are in `.docs/`:
@@ -223,3 +261,5 @@ All design documents are in `.docs/`:
 | `plan.md` | High-level design: schema, query DSL, concurrency algorithm, streaming |
 | `architecture-review.md` | Tech stack justification (TypeScript vs Rust/C, cross-language FFI analysis) |
 | `implementation-plan.md` | Task-by-task breakdown with test specifications and status tracking |
+| `university-app-plan.md` | University app domain design: events, commands, business rules, API |
+| `university-implementation-plan.md` | University app task-by-task implementation plan |
