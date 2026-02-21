@@ -77,6 +77,7 @@ export function reduceCourseForUnenroll(events: StoredEvent[]): CourseUnenrollSt
 export interface UnenrollStudentInput {
   studentId: string;
   courseId: string;
+  reason: string;
   unenrolledBy: string;
 }
 

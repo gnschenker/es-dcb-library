@@ -20,6 +20,7 @@ import {
 } from '../../src/commands/grade-student.js';
 import {
   StudentNotFoundError,
+  CourseNotFoundError,
   CourseNotOpenError,
   StudentAlreadyEnrolledError,
   EnrollmentFullError,
@@ -358,6 +359,18 @@ describe('enrollStudent command', () => {
       .rejects.toThrow(StudentNotFoundError);
   });
 
+  it('throws CourseNotFoundError when course does not exist', async () => {
+    const store = makeMockStore({
+      load: vi.fn()
+        .mockResolvedValueOnce({ events: registeredStudentEvents, version: 1n })
+        .mockResolvedValueOnce({ events: [], version: 0n })
+        .mockResolvedValueOnce({ events: [], version: 0n })
+        .mockResolvedValueOnce({ events: [], version: 0n }),
+    });
+    await expect(enrollStudent(store, systemClock, { studentId: 's1', courseId: 'nonexistent' }))
+      .rejects.toThrow(CourseNotFoundError);
+  });
+
   it('throws CourseNotOpenError when course is not open', async () => {
     const draftCourse = [makeEvent('CourseCreated', { courseId: 'c1', title: 'Intro', semester: 'F24', creditHours: 3, maxStudents: 30, prerequisites: [], passingGrade: 60, dropDeadline: '2030-09-15', withdrawalDeadline: '2030-10-15' })];
     const store = makeMockStore({
@@ -432,7 +445,7 @@ describe('unenrollStudent command', () => {
         .mockResolvedValueOnce({ events: enrolledEvents, version: 1n })
         .mockResolvedValueOnce({ events: openCourseEvents, version: 2n }),
     });
-    await unenrollStudent(store, systemClock, { studentId: 's1', courseId: 'c1', unenrolledBy: 's1' });
+    await unenrollStudent(store, systemClock, { studentId: 's1', courseId: 'c1', reason: 'personal', unenrolledBy: 's1' });
     expect(store.append).toHaveBeenCalledOnce();
     const appendCall = vi.mocked(store.append).mock.calls[0] as unknown as [Array<{ type: string }>];
     expect(appendCall[0]?.[0]?.type).toBe('StudentDropped');
@@ -448,7 +461,7 @@ describe('unenrollStudent command', () => {
         .mockResolvedValueOnce({ events: enrolledEvents, version: 1n })
         .mockResolvedValueOnce({ events: pastDropCourse, version: 2n }),
     });
-    await unenrollStudent(store, systemClock, { studentId: 's1', courseId: 'c1', unenrolledBy: 's1' });
+    await unenrollStudent(store, systemClock, { studentId: 's1', courseId: 'c1', reason: 'personal', unenrolledBy: 's1' });
     const appendCall = vi.mocked(store.append).mock.calls[0] as unknown as [Array<{ type: string }>];
     expect(appendCall[0]?.[0]?.type).toBe('StudentWithdrew');
   });
@@ -459,7 +472,7 @@ describe('unenrollStudent command', () => {
         .mockResolvedValueOnce({ events: [], version: 0n })
         .mockResolvedValueOnce({ events: openCourseEvents, version: 2n }),
     });
-    await expect(unenrollStudent(store, systemClock, { studentId: 's1', courseId: 'c1', unenrolledBy: 's1' }))
+    await expect(unenrollStudent(store, systemClock, { studentId: 's1', courseId: 'c1', reason: 'personal', unenrolledBy: 's1' }))
       .rejects.toThrow(StudentNotEnrolledError);
   });
 
@@ -473,7 +486,7 @@ describe('unenrollStudent command', () => {
         .mockResolvedValueOnce({ events: gradedEvents, version: 2n })
         .mockResolvedValueOnce({ events: openCourseEvents, version: 2n }),
     });
-    await expect(unenrollStudent(store, systemClock, { studentId: 's1', courseId: 'c1', unenrolledBy: 's1' }))
+    await expect(unenrollStudent(store, systemClock, { studentId: 's1', courseId: 'c1', reason: 'personal', unenrolledBy: 's1' }))
       .rejects.toThrow(StudentAlreadyGradedError);
   });
 
@@ -487,7 +500,7 @@ describe('unenrollStudent command', () => {
         .mockResolvedValueOnce({ events: enrolledEvents, version: 1n })
         .mockResolvedValueOnce({ events: pastDeadlineCourse, version: 2n }),
     });
-    await expect(unenrollStudent(store, systemClock, { studentId: 's1', courseId: 'c1', unenrolledBy: 's1' }))
+    await expect(unenrollStudent(store, systemClock, { studentId: 's1', courseId: 'c1', reason: 'personal', unenrolledBy: 's1' }))
       .rejects.toThrow(UnenrollAfterDeadlineError);
   });
 });

@@ -3,6 +3,7 @@ import { query } from 'es-dcb-library';
 import type { Clock } from '../domain/clock.js';
 import {
   StudentNotFoundError,
+  CourseNotFoundError,
   CourseNotOpenError,
   StudentAlreadyEnrolledError,
   EnrollmentFullError,
@@ -154,6 +155,9 @@ export async function enrollStudent(
   }
 
   const courseState = reduceCourseForEnroll(courseEvents);
+  if (courseState.status === 'none') {
+    throw new CourseNotFoundError(`Course '${input.courseId}' not found`);
+  }
   if (courseState.status !== 'open') {
     throw new CourseNotOpenError(
       `Course '${input.courseId}' is not open (current: ${courseState.status})`,
