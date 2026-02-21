@@ -118,7 +118,7 @@ T-09 + T-10 + T-11 + T-12 must be done before:
 | T-05 | Core Types & Errors | `done` | — |
 | T-06 | Database Schema DDL | `done` | — |
 | T-07 | Row Mapper | `pending` | — |
-| T-08 | Integration Test Infrastructure | `pending` | — |
+| T-08 | Integration Test Infrastructure | `done` | — |
 | T-09 | Event Store — `load()` | `pending` | — |
 | T-10 | Event Store — `append()` (no concurrency) | `pending` | — |
 | T-11 | Event Store — `append()` with advisory locks | `pending` | — |
@@ -782,7 +782,7 @@ Key conversions:
 
 ### T-08 — Integration Test Infrastructure
 
-**Status:** `pending`
+**Status:** `done`
 **Claimed by:** —
 **Depends on:** T-01
 **Blocks:** T-09, T-10, T-11, T-12 (integration tests)
