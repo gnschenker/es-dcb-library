@@ -114,7 +114,7 @@ T-09 + T-10 + T-11 + T-12 must be done before:
 | T-01 | Project Scaffolding | `done` | — |
 | T-02 | Query Internal Types | `done` | — |
 | T-03 | Query Builder | `done` | — |
-| T-04 | Query Compiler | `pending` | — |
+| T-04 | Query Compiler | `in implementation` | T-04-agent |
 | T-05 | Core Types & Errors | `pending` | — |
 | T-06 | Database Schema DDL | `done` | — |
 | T-07 | Row Mapper | `done` | — |
@@ -356,8 +356,8 @@ export const query = {
 
 ### T-04 — Query Compiler
 
-**Status:** `pending`
-**Claimed by:** —
+**Status:** `in implementation`
+**Claimed by:** T-04-agent
 **Depends on:** T-03
 **Blocks:** T-09
 
