@@ -119,7 +119,7 @@ T-09 + T-10 + T-11 + T-12 must be done before:
 | T-06 | Database Schema DDL | `done` | — |
 | T-07 | Row Mapper | `done` | — |
 | T-08 | Integration Test Infrastructure | `done` | — |
-| T-09 | Event Store — `load()` | `in implementation` | T-09-agent |
+| T-09 | Event Store — `load()` | `done` | — |
 | T-10 | Event Store — `append()` (no concurrency) | `pending` | — |
 | T-11 | Event Store — `append()` with advisory locks | `pending` | — |
 | T-12 | Event Store — `stream()` | `pending` | — |
@@ -840,8 +840,8 @@ export async function seedEvents(
 
 ### T-09 — Event Store — `load()`
 
-**Status:** `in implementation`
-**Claimed by:** T-09-agent
+**Status:** `done`
+**Claimed by:** —
 **Depends on:** T-04, T-05, T-06, T-07, T-08
 **Blocks:** T-10, T-11, T-12, T-13
 
