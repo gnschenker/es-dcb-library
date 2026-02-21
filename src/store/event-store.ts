@@ -1,8 +1,8 @@
 import pg from 'pg';
 import type { QueryDefinition } from '../query/types.js';
 import type { NewEvent, StoredEvent, LoadResult, AppendOptions, StreamOptions, EventStore } from '../types.js';
-import { EventStoreError } from '../errors.js';
-import { compileLoadQuery, compileStreamQuery } from '../query/compiler.js';
+import { ConcurrencyError, EventStoreError } from '../errors.js';
+import { compileLoadQuery, compileVersionCheckQuery, compileCanonicalKey, compileStreamQuery } from '../query/compiler.js';
 import { applySchema } from './schema.js';
 import { mapRow } from './row-mapper.js';
 
@@ -42,23 +42,50 @@ export class PostgresEventStore implements EventStore {
   }
 
   async append(events: NewEvent | NewEvent[], options?: AppendOptions): Promise<StoredEvent[]> {
-    // options is accepted but ignored in T-10 (T-11 will add concurrency logic)
-    void options;
-
     const eventList = Array.isArray(events) ? events : [events];
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
+
+      if (options !== undefined) {
+        // Set session-local timeouts (reset automatically on COMMIT/ROLLBACK)
+        await client.query("SET LOCAL lock_timeout = '5s'");
+        await client.query("SET LOCAL statement_timeout = '30s'");
+
+        // Acquire per-stream advisory lock (non-blocking)
+        const concurrencyTarget = options.concurrencyQuery ?? options.query;
+        const canonicalKey = compileCanonicalKey(concurrencyTarget);
+        const lockResult = await client.query<{ acquired: boolean }>(
+          'SELECT pg_try_advisory_xact_lock(hashtext($1)) AS acquired',
+          [canonicalKey]
+        );
+        const acquired = lockResult.rows[0]!.acquired;
+        if (!acquired) {
+          await client.query('ROLLBACK');
+          throw new ConcurrencyError(
+            options.expectedVersion,
+            options.expectedVersion,
+            'Advisory lock could not be acquired — another writer holds the lock'
+          );
+        }
+
+        // Version check
+        const { sql: versionSql, params: versionParams } = compileVersionCheckQuery(concurrencyTarget);
+        const versionResult = await client.query<{ max_pos: string }>(versionSql, versionParams as unknown[]);
+        const actualVersion = BigInt(versionResult.rows[0]!.max_pos);
+        if (actualVersion !== options.expectedVersion) {
+          await client.query('ROLLBACK');
+          throw new ConcurrencyError(options.expectedVersion, actualVersion);
+        }
+      }
+
+      // Insert all events
       const stored: StoredEvent[] = [];
       for (const event of eventList) {
         const sql = `INSERT INTO events (type, payload, metadata)
         VALUES ($1, $2::jsonb, $3::jsonb)
         RETURNING global_position, event_id, type, payload, metadata, occurred_at`.trim();
-        const params = [
-          event.type,
-          event.payload,
-          event.metadata ?? null,
-        ];
+        const params = [event.type, event.payload, event.metadata ?? null];
         let result: pg.QueryResult;
         try {
           result = await client.query(sql, params);
@@ -68,11 +95,11 @@ export class PostgresEventStore implements EventStore {
         }
         stored.push(mapRow(result.rows[0]!));
       }
+
       await client.query('COMMIT');
       return stored;
     } catch (err) {
-      // If we haven't already rolled back (non-EventStoreError path)
-      if (!(err instanceof EventStoreError)) {
+      if (!(err instanceof EventStoreError) && !(err instanceof ConcurrencyError)) {
         await client.query('ROLLBACK').catch(() => undefined);
         throw new EventStoreError(`Failed to append events: ${String(err)}`, err);
       }
