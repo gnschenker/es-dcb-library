@@ -1,3 +1,4 @@
+import { afterAll } from 'vitest';
 import pg from 'pg';
 import { PostgresEventStore } from 'es-dcb-library';
 import type { EventStore } from 'es-dcb-library';
@@ -9,7 +10,7 @@ export function createTestStore(): EventStore {
 }
 
 // Lazy pool for TRUNCATE — created on first use to avoid module-load-time issues
-// (TEST_DATABASE_URL is set by globalSetup before any test file runs)
+// (TEST_DATABASE_URL is set by setupFiles beforeAll before any test file runs)
 let _adminPool: pg.Pool | undefined;
 
 function getAdminPool(): pg.Pool {
@@ -22,3 +23,7 @@ function getAdminPool(): pg.Pool {
 export async function clearEvents(): Promise<void> {
   await getAdminPool().query('TRUNCATE events RESTART IDENTITY CASCADE');
 }
+
+afterAll(async () => {
+  await _adminPool?.end();
+});
