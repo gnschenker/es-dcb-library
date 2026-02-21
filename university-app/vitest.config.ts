@@ -15,7 +15,10 @@ export default defineConfig({
           name: 'integration',
           include: ['tests/integration/**/*.test.ts'],
           testTimeout: 60000,
-          globalSetup: ['./tests/integration/setup.ts'],
+          // container-setup.ts starts the PostgreSQL testcontainer once per worker.
+          // Using setupFiles (not globalSetup) because globalSetup env vars do not
+          // propagate to forked workers in Vitest 3.2.x with inline projects.
+          setupFiles: ['./tests/integration/container-setup.ts'],
           poolOptions: {
             forks: {
               singleFork: true,
