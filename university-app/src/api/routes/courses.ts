@@ -179,21 +179,31 @@ export async function registerCourseRoutes(
   // GET /courses/:courseId/enrollments — list all enrollment states
   app.get('/courses/:courseId/enrollments', async (request, reply) => {
     const { courseId } = request.params as { courseId: string };
+
+    // First verify the course exists
+    const { events: courseEvents } = await store.load(courseStream(courseId));
+    const courseState = reduceCourseForRead(courseEvents);
+    if (courseState.status === 'none') {
+      return reply.status(404).send({ error: 'CourseNotFoundError', message: `Course '${courseId}' not found` });
+    }
+
     const { events } = await store.load(courseEnrollmentStream(courseId));
 
-    // Group events by studentId and build per-student enrollment state
+    // Group events by studentId
     const studentIds = new Set<string>();
     for (const event of events) {
       const studentId = event.payload['studentId'] as string | undefined;
       if (studentId) studentIds.add(studentId);
     }
 
-    const enrollments: { studentId: string; status: string; grade?: number }[] = [];
-    for (const studentId of studentIds) {
-      const studentEnrollmentEvents = await store.load(enrollmentStream(studentId, courseId));
-      const state = reduceEnrollmentForRead(studentEnrollmentEvents.events);
-      enrollments.push({ studentId, ...state });
-    }
+    // Parallelize per-student enrollment stream loads
+    const enrollments = await Promise.all(
+      Array.from(studentIds).map(async (studentId) => {
+        const { events: studentEnrollmentEvents } = await store.load(enrollmentStream(studentId, courseId));
+        const state = reduceEnrollmentForRead(studentEnrollmentEvents);
+        return { studentId, ...state };
+      }),
+    );
 
     return reply.status(200).send(enrollments);
   });

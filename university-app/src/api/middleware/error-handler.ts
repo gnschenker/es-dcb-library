@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import { ConcurrencyError } from 'es-dcb-library';
+import { ConcurrencyError, EventStoreError } from 'es-dcb-library';
 import {
   TeacherNotFoundError,
   CourseNotFoundError,
@@ -27,6 +27,12 @@ export function registerErrorHandler(app: FastifyInstance): void {
       error instanceof StudentNotFoundError
     ) {
       return reply.status(404).send({ error: error.name, message: error.message });
+    }
+
+    // Infrastructure errors → 500 (not 422 — these are not domain rule violations)
+    if (error instanceof EventStoreError) {
+      app.log.error(error);
+      return reply.status(500).send({ error: 'InternalError', message: 'Internal server error' });
     }
 
     // Fastify built-in errors have a numeric `statusCode` — pass it through

@@ -110,6 +110,14 @@ export async function registerStudentRoutes(
   // GET /students/:studentId/courses — list per-course enrollment history
   app.get('/students/:studentId/courses', async (request, reply) => {
     const { studentId } = request.params as { studentId: string };
+
+    // Verify student exists before loading enrollment history
+    const { events: studentEvents } = await store.load(studentStream(studentId));
+    const studentState = reduceStudentForRead(studentEvents);
+    if (studentState === null) {
+      return reply.status(404).send({ error: 'StudentNotFoundError', message: `Student '${studentId}' not found` });
+    }
+
     const { events } = await store.load(studentEnrollmentHistoryStream(studentId));
     const courseMap = reduceCourseHistory(events);
     const courses = Array.from(courseMap.entries()).map(([courseId, state]) => ({
