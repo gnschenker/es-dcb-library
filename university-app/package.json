@@ -1,0 +1,26 @@
+{
+  "name": "university-app",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=18" },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:unit": "vitest run --project unit",
+    "test:integration": "vitest run --project integration",
+    "test:watch": "vitest --watch"
+  },
+  "dependencies": {
+    "es-dcb-library": "file:../",
+    "fastify": "^5.2.1",
+    "pg": "^8.13.3",
+    "uuid": "^9.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/pg": "^8.11.0",
+    "testcontainers": "^10.24.0",
+    "typescript": "^5.7.3",
+    "vitest": "^3.0.5"
+  }
+}
