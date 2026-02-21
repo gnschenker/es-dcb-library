@@ -115,7 +115,7 @@ T-09 + T-10 + T-11 + T-12 must be done before:
 | T-02 | Query Internal Types | `done` | — |
 | T-03 | Query Builder | `done` | — |
 | T-04 | Query Compiler | `done` | — |
-| T-05 | Core Types & Errors | `pending` | — |
+| T-05 | Core Types & Errors | `done` | — |
 | T-06 | Database Schema DDL | `done` | — |
 | T-07 | Row Mapper | `done` | — |
 | T-08 | Integration Test Infrastructure | `done` | — |
