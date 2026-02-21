@@ -17,6 +17,11 @@ export default defineConfig({
           testTimeout: 30000,
           globalSetup: ['tests/integration/setup.ts'],
           pool: 'forks',
+          poolOptions: {
+            forks: {
+              singleFork: true,
+            },
+          },
         },
       },
     ],
