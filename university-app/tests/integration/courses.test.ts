@@ -58,26 +58,35 @@ describe('CreateCourse', () => {
 
   it('invalid creditHours = 0 → InvalidCreditHoursError', async () => {
     const store = createTestStore();
-    await expect(
-      createCourse(store, systemClock, { ...BASE_COURSE, creditHours: 0 }),
-    ).rejects.toThrow(InvalidCreditHoursError);
-    await store.close();
+    try {
+      await expect(
+        createCourse(store, systemClock, { ...BASE_COURSE, creditHours: 0 }),
+      ).rejects.toThrow(InvalidCreditHoursError);
+    } finally {
+      await store.close();
+    }
   });
 
   it('invalid creditHours = 7 → InvalidCreditHoursError', async () => {
     const store = createTestStore();
-    await expect(
-      createCourse(store, systemClock, { ...BASE_COURSE, creditHours: 7 }),
-    ).rejects.toThrow(InvalidCreditHoursError);
-    await store.close();
+    try {
+      await expect(
+        createCourse(store, systemClock, { ...BASE_COURSE, creditHours: 7 }),
+      ).rejects.toThrow(InvalidCreditHoursError);
+    } finally {
+      await store.close();
+    }
   });
 
   it('non-existent prerequisite → PrerequisiteNotFoundError', async () => {
     const store = createTestStore();
-    await expect(
-      createCourse(store, systemClock, { ...BASE_COURSE, prerequisites: ['nonexistent-course-id'] }),
-    ).rejects.toThrow(PrerequisiteNotFoundError);
-    await store.close();
+    try {
+      await expect(
+        createCourse(store, systemClock, { ...BASE_COURSE, prerequisites: ['nonexistent-course-id'] }),
+      ).rejects.toThrow(PrerequisiteNotFoundError);
+    } finally {
+      await store.close();
+    }
   });
 
   it('valid prerequisite (existing courseId) → succeeds', async () => {
@@ -126,9 +135,12 @@ describe('PublishCourse', () => {
 
   it('no assigned teacher → CourseNoTeacherError', async () => {
     const store = createTestStore();
-    const { courseId } = await createCourse(store, systemClock, BASE_COURSE);
-    await expect(publishCourse(store, systemClock, { courseId })).rejects.toThrow(CourseNoTeacherError);
-    await store.close();
+    try {
+      const { courseId } = await createCourse(store, systemClock, BASE_COURSE);
+      await expect(publishCourse(store, systemClock, { courseId })).rejects.toThrow(CourseNoTeacherError);
+    } finally {
+      await store.close();
+    }
   });
 });
 
@@ -146,9 +158,12 @@ describe('CloseCourse', () => {
 
   it('course not open → CourseNotOpenError', async () => {
     const store = createTestStore();
-    const { courseId } = await createCourse(store, systemClock, BASE_COURSE); // draft
-    await expect(closeCourse(store, systemClock, { courseId })).rejects.toThrow(CourseNotOpenError);
-    await store.close();
+    try {
+      const { courseId } = await createCourse(store, systemClock, BASE_COURSE); // draft
+      await expect(closeCourse(store, systemClock, { courseId })).rejects.toThrow(CourseNotOpenError);
+    } finally {
+      await store.close();
+    }
   });
 });
 
@@ -167,12 +182,15 @@ describe('CancelCourse', () => {
 
   it('cancel already cancelled → CourseAlreadyCancelledError', async () => {
     const store = createTestStore();
-    const { courseId } = await createCourse(store, systemClock, BASE_COURSE);
-    await cancelCourse(store, systemClock, { courseId, reason: 'first' });
-    await expect(
-      cancelCourse(store, systemClock, { courseId, reason: 'second' }),
-    ).rejects.toThrow(CourseAlreadyCancelledError);
-    await store.close();
+    try {
+      const { courseId } = await createCourse(store, systemClock, BASE_COURSE);
+      await cancelCourse(store, systemClock, { courseId, reason: 'first' });
+      await expect(
+        cancelCourse(store, systemClock, { courseId, reason: 'second' }),
+      ).rejects.toThrow(CourseAlreadyCancelledError);
+    } finally {
+      await store.close();
+    }
   });
 
   it('cancel open course with enrolled students → StudentDropped + CourseCancelled', async () => {
@@ -191,7 +209,7 @@ describe('CancelCourse', () => {
     const droppedStream = query
       .eventsOfType('StudentDropped').where.key('courseId').equals(courseId);
     const { events: droppedEvents } = await store.load(droppedStream);
-    expect(droppedEvents.some(e => e.type === 'StudentDropped')).toBe(true);
+    expect(droppedEvents).toHaveLength(1); // exactly one student was enrolled
 
     const cancelledStream = query
       .eventsOfType('CourseCancelled').where.key('courseId').equals(courseId);

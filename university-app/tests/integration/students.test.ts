@@ -19,9 +19,12 @@ describe('RegisterStudent', () => {
 
   it('same email twice → StudentAlreadyRegisteredError', async () => {
     const store = createTestStore();
-    await registerStudent(store, systemClock, STUDENT);
-    await expect(registerStudent(store, systemClock, STUDENT)).rejects.toThrow(StudentAlreadyRegisteredError);
-    await store.close();
+    try {
+      await registerStudent(store, systemClock, STUDENT);
+      await expect(registerStudent(store, systemClock, STUDENT)).rejects.toThrow(StudentAlreadyRegisteredError);
+    } finally {
+      await store.close();
+    }
   });
 
   it('email is case-insensitive for studentId derivation', async () => {

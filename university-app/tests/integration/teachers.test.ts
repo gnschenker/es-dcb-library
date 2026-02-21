@@ -46,9 +46,12 @@ describe('HireTeacher', () => {
 
   it('same email twice → TeacherAlreadyHiredError', async () => {
     const store = createTestStore();
-    await hireTeacher(store, systemClock, TEACHER);
-    await expect(hireTeacher(store, systemClock, TEACHER)).rejects.toThrow(TeacherAlreadyHiredError);
-    await store.close();
+    try {
+      await hireTeacher(store, systemClock, TEACHER);
+      await expect(hireTeacher(store, systemClock, TEACHER)).rejects.toThrow(TeacherAlreadyHiredError);
+    } finally {
+      await store.close();
+    }
   });
 
   it('deterministic id — same email → same teacherId', async () => {
@@ -61,35 +64,47 @@ describe('HireTeacher', () => {
 });
 
 describe('DismissTeacher', () => {
-  it('happy path — TeacherDismissed appended', async () => {
+  it('happy path — TeacherDismissed appended with correct payload', async () => {
     const store = createTestStore();
-    const { teacherId } = await hireTeacher(store, systemClock, TEACHER);
-    await dismissTeacher(store, systemClock, { teacherId, reason: 'budget cuts' });
+    try {
+      const { teacherId } = await hireTeacher(store, systemClock, TEACHER);
+      await dismissTeacher(store, systemClock, { teacherId, reason: 'budget cuts' });
 
-    const teacherStream = query
-      .eventsOfType('TeacherHired').where.key('teacherId').equals(teacherId)
-      .eventsOfType('TeacherDismissed').where.key('teacherId').equals(teacherId);
-    const { events } = await store.load(teacherStream);
-    expect(events.some(e => e.type === 'TeacherDismissed')).toBe(true);
-    await store.close();
+      const teacherStream = query
+        .eventsOfType('TeacherHired').where.key('teacherId').equals(teacherId)
+        .eventsOfType('TeacherDismissed').where.key('teacherId').equals(teacherId);
+      const { events } = await store.load(teacherStream);
+      const dismissed = events.find(e => e.type === 'TeacherDismissed');
+      expect(dismissed).toBeDefined();
+      expect(dismissed?.payload['teacherId']).toBe(teacherId);
+      expect(dismissed?.payload['reason']).toBe('budget cuts');
+    } finally {
+      await store.close();
+    }
   });
 
   it('non-existent teacher → TeacherNotFoundError', async () => {
     const store = createTestStore();
-    await expect(
-      dismissTeacher(store, systemClock, { teacherId: 'nonexistent', reason: 'test' }),
-    ).rejects.toThrow(TeacherNotFoundError);
-    await store.close();
+    try {
+      await expect(
+        dismissTeacher(store, systemClock, { teacherId: 'nonexistent', reason: 'test' }),
+      ).rejects.toThrow(TeacherNotFoundError);
+    } finally {
+      await store.close();
+    }
   });
 
   it('dismiss twice → TeacherDismissedError on second', async () => {
     const store = createTestStore();
-    const { teacherId } = await hireTeacher(store, systemClock, TEACHER);
-    await dismissTeacher(store, systemClock, { teacherId, reason: 'first' });
-    await expect(
-      dismissTeacher(store, systemClock, { teacherId, reason: 'second' }),
-    ).rejects.toThrow(TeacherDismissedError);
-    await store.close();
+    try {
+      const { teacherId } = await hireTeacher(store, systemClock, TEACHER);
+      await dismissTeacher(store, systemClock, { teacherId, reason: 'first' });
+      await expect(
+        dismissTeacher(store, systemClock, { teacherId, reason: 'second' }),
+      ).rejects.toThrow(TeacherDismissedError);
+    } finally {
+      await store.close();
+    }
   });
 
   it('re-hire after dismissal succeeds', async () => {
@@ -104,15 +119,18 @@ describe('DismissTeacher', () => {
 
   it('dismiss when assigned to open course → TeacherAssignedToOpenCourseError (BR-T4)', async () => {
     const store = createTestStore();
-    const { teacherId } = await hireTeacher(store, systemClock, TEACHER);
-    const { courseId } = await createCourse(store, systemClock, COURSE);
-    await assignTeacher(store, systemClock, { courseId, teacherId });
-    await publishCourse(store, systemClock, { courseId });
+    try {
+      const { teacherId } = await hireTeacher(store, systemClock, TEACHER);
+      const { courseId } = await createCourse(store, systemClock, COURSE);
+      await assignTeacher(store, systemClock, { courseId, teacherId });
+      await publishCourse(store, systemClock, { courseId });
 
-    await expect(
-      dismissTeacher(store, systemClock, { teacherId, reason: 'cuts' }),
-    ).rejects.toThrow(TeacherAssignedToOpenCourseError);
-    await store.close();
+      await expect(
+        dismissTeacher(store, systemClock, { teacherId, reason: 'cuts' }),
+      ).rejects.toThrow(TeacherAssignedToOpenCourseError);
+    } finally {
+      await store.close();
+    }
   });
 
   it('dismiss when assigned to draft course → auto TeacherRemovedFromCourse + TeacherDismissed', async () => {
