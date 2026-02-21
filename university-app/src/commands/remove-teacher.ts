@@ -26,6 +26,17 @@ function courseEnrollmentStream(courseId: string) {
     .eventsOfType('StudentWithdrew').where.key('courseId').equals(courseId);
 }
 
+// Per-student enrollment stream — includes grading events, giving correct terminal status
+function enrollmentStream(studentId: string, courseId: string) {
+  return query
+    .eventsOfType('StudentEnrolled').where.key('studentId').equals(studentId).and.key('courseId').equals(courseId)
+    .eventsOfType('StudentDropped').where.key('studentId').equals(studentId).and.key('courseId').equals(courseId)
+    .eventsOfType('StudentWithdrew').where.key('studentId').equals(studentId).and.key('courseId').equals(courseId)
+    .eventsOfType('StudentGraded').where.key('studentId').equals(studentId).and.key('courseId').equals(courseId)
+    .eventsOfType('StudentPassedCourse').where.key('studentId').equals(studentId).and.key('courseId').equals(courseId)
+    .eventsOfType('StudentFailedCourse').where.key('studentId').equals(studentId).and.key('courseId').equals(courseId);
+}
+
 // Exported reducers (for unit tests)
 export type CourseRemoveState = {
   status: 'none' | 'draft' | 'open' | 'closed' | 'cancelled';
@@ -53,15 +64,22 @@ export function reduceCourseForRemove(events: StoredEvent[]): CourseRemoveState 
   return state;
 }
 
-export function reduceEnrollmentCountForRemove(events: StoredEvent[]): number {
-  let count = 0;
+// Full enrollment status including grading events — same pattern as close-course.ts
+export type EnrollmentRemoveState = {
+  status: 'none' | 'enrolled' | 'dropped' | 'withdrew' | 'graded' | 'passed' | 'failed';
+};
+
+export function reduceEnrollmentForRemove(events: StoredEvent[]): EnrollmentRemoveState {
+  let status: EnrollmentRemoveState['status'] = 'none';
   for (const event of events) {
-    if (event.type === 'StudentEnrolled') count++;
-    else if (event.type === 'StudentDropped' || event.type === 'StudentWithdrew') {
-      count = Math.max(0, count - 1);
-    }
+    if (event.type === 'StudentEnrolled') status = 'enrolled';
+    else if (event.type === 'StudentDropped') status = 'dropped';
+    else if (event.type === 'StudentWithdrew') status = 'withdrew';
+    else if (event.type === 'StudentGraded') status = 'graded';
+    else if (event.type === 'StudentPassedCourse') status = 'passed';
+    else if (event.type === 'StudentFailedCourse') status = 'failed';
   }
-  return count;
+  return { status };
 }
 
 export interface RemoveTeacherInput { courseId: string; }
@@ -86,10 +104,28 @@ export async function removeTeacher(
   if (courseState.teacherId == null) {
     throw new CourseNoTeacherError(`Course '${input.courseId}' has no teacher assigned`);
   }
-  if (courseState.status === 'open' && reduceEnrollmentCountForRemove(enrollEvents) > 0) {
-    throw new CourseHasActiveEnrollmentsError(
-      `Cannot remove teacher from open course '${input.courseId}' with active enrollments`,
-    );
+
+  if (courseState.status === 'open') {
+    // Collect unique student IDs from the course enrollment stream
+    const studentIds = new Set<string>();
+    for (const event of enrollEvents) {
+      if (event.type === 'StudentEnrolled') {
+        studentIds.add(event.payload['studentId'] as string);
+      }
+    }
+    // Per-student load: courseEnrollmentStream lacks grading events, so a graded student
+    // would incorrectly appear as "enrolled" if we only counted from that stream.
+    for (const studentId of studentIds) {
+      const { events: perStudentEvents } = await store.load(
+        enrollmentStream(studentId, input.courseId),
+      );
+      const enrollmentState = reduceEnrollmentForRemove(perStudentEvents);
+      if (enrollmentState.status === 'enrolled') {
+        throw new CourseHasActiveEnrollmentsError(
+          `Cannot remove teacher from open course '${input.courseId}' with active enrollments`,
+        );
+      }
+    }
   }
 
   const payload: TeacherRemovedFromCoursePayload = {

@@ -5,7 +5,6 @@ import {
   CourseNotFoundError,
   CourseNotInDraftError,
   CourseNoTeacherError,
-  InvalidMaxStudentsError,
   TeacherDismissedError,
 } from '../domain/errors.js';
 import type { CoursePublishedPayload } from '../domain/events.js';
@@ -96,9 +95,6 @@ export async function publishCourse(
   }
   if (courseState.teacherId == null) {
     throw new CourseNoTeacherError(`Course '${input.courseId}' has no teacher assigned`);
-  }
-  if ((courseState.maxStudents ?? 0) < 1) {
-    throw new InvalidMaxStudentsError(`Course '${input.courseId}' has invalid maxStudents`);
   }
 
   const { events: teacherEvents } = await store.load(teacherStream(courseState.teacherId));
