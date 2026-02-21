@@ -122,7 +122,7 @@ T-09 + T-10 + T-11 + T-12 must be done before:
 | T-09 | Event Store — `load()` | `done` | — |
 | T-10 | Event Store — `append()` (no concurrency) | `done` | — |
 | T-11 | Event Store — `append()` with advisory locks | `pending` | — |
-| T-12 | Event Store — `stream()` | `in implementation` | T-12-agent |
+| T-12 | Event Store — `stream()` | `done` | — |
 | T-13 | Public API Barrel + Build Verification | `pending` | — |
 
 ---
@@ -1068,8 +1068,8 @@ Use a mock client that records all SQL calls in order.
 
 ### T-12 — Event Store — `stream()`
 
-**Status:** `in implementation`
-**Claimed by:** T-12-agent
+**Status:** `done`
+**Claimed by:** —
 **Depends on:** T-09
 **Blocks:** T-13
 
