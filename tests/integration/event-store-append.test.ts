@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterAll } from 'vitest';
 import pg from 'pg';
 import { PostgresEventStore } from '../../src/store/event-store.js';
 import { query } from '../../src/query/query-object.js';
+import { EventStoreError } from '../../src/errors.js';
 import { createTestPool, resetDatabase } from './helpers.js';
 
 let pool: pg.Pool;
@@ -65,14 +66,57 @@ describe('PostgresEventStore.append() (integration)', () => {
   });
 
   it('rolls back all inserts when one fails mid-batch', async () => {
-    // Verify atomicity by checking that a successful batch commits all events
-    // and they are all visible via load()
-    const result = await store.append([
-      { type: 'Batch', payload: { n: 1 } },
-      { type: 'Batch', payload: { n: 2 } },
-    ]);
-    expect(result).toHaveLength(2);
-    const loadResult = await store.load(query.eventsOfType('Batch'));
-    expect(loadResult.events).toHaveLength(2);
+    // Count events before the test
+    const countBefore = parseInt(
+      String((await pool.query('SELECT COUNT(*) AS cnt FROM events')).rows[0]!['cnt']),
+      10,
+    );
+
+    // Build a fake pool whose client fails on the second INSERT, simulating a mid-batch failure.
+    // This verifies that append() issues ROLLBACK and wraps the error in EventStoreError,
+    // leaving no events committed.
+    let insertCallCount = 0;
+    const realClient = await pool.connect();
+
+    const fakeClient = {
+      query: async (sql: string, params?: unknown[]) => {
+        const sqlStr = String(sql);
+        if (/INSERT/i.test(sqlStr)) {
+          insertCallCount++;
+          if (insertCallCount === 2) {
+            throw new Error('simulated constraint violation on second insert');
+          }
+          // First INSERT goes through real client
+          return realClient.query(sql, params as unknown[]);
+        }
+        // BEGIN / ROLLBACK go through real client
+        return realClient.query(sql);
+      },
+      release: () => {
+        realClient.release();
+      },
+    };
+
+    const fakePool = {
+      connect: async () => fakeClient,
+    } as unknown as pg.Pool;
+
+    const storeWithFakePool = new PostgresEventStore({ pool: fakePool });
+
+    // The append should throw EventStoreError because the second insert fails
+    await expect(
+      storeWithFakePool.append([
+        { type: 'RollbackTest', payload: { n: 1 } },
+        { type: 'RollbackTest', payload: { n: 2 } },
+        { type: 'RollbackTest', payload: { n: 3 } },
+      ])
+    ).rejects.toBeInstanceOf(EventStoreError);
+
+    // Verify the event count is unchanged — the first insert was rolled back
+    const countAfter = parseInt(
+      String((await pool.query('SELECT COUNT(*) AS cnt FROM events')).rows[0]!['cnt']),
+      10,
+    );
+    expect(countAfter).toBe(countBefore);
   });
 });
