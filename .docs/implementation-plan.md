@@ -123,7 +123,7 @@ T-09 + T-10 + T-11 + T-12 must be done before:
 | T-10 | Event Store — `append()` (no concurrency) | `done` | — |
 | T-11 | Event Store — `append()` with advisory locks | `done` | — |
 | T-12 | Event Store — `stream()` | `done` | — |
-| T-13 | Public API Barrel + Build Verification | `pending` | — |
+| T-13 | Public API Barrel + Build Verification | `in implementation` | T-13-agent |
 
 ---
 
@@ -1147,8 +1147,8 @@ Mock `pool.query` to return controlled rows.
 
 ### T-13 — Public API Barrel + Build Verification
 
-**Status:** `pending`
-**Claimed by:** —
+**Status:** `in implementation`
+**Claimed by:** T-13-agent
 **Depends on:** T-09, T-10, T-11, T-12
 **Blocks:** nothing
 
