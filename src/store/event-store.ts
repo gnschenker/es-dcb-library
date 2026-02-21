@@ -41,8 +41,45 @@ export class PostgresEventStore implements EventStore {
     return { events, version };
   }
 
-  async append(_events: NewEvent | NewEvent[], _options?: AppendOptions): Promise<StoredEvent[]> {
-    throw new Error('not implemented');
+  async append(events: NewEvent | NewEvent[], options?: AppendOptions): Promise<StoredEvent[]> {
+    // options is accepted but ignored in T-10 (T-11 will add concurrency logic)
+    void options;
+
+    const eventList = Array.isArray(events) ? events : [events];
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const stored: StoredEvent[] = [];
+      for (const event of eventList) {
+        const sql = `INSERT INTO events (type, payload, metadata)
+        VALUES ($1, $2::jsonb, $3::jsonb)
+        RETURNING global_position, event_id, type, payload, metadata, occurred_at`.trim();
+        const params = [
+          event.type,
+          event.payload,
+          event.metadata ?? null,
+        ];
+        let result: pg.QueryResult;
+        try {
+          result = await client.query(sql, params);
+        } catch (err) {
+          await client.query('ROLLBACK');
+          throw new EventStoreError(`Failed to append event: ${String(err)}`, err);
+        }
+        stored.push(mapRow(result.rows[0]!));
+      }
+      await client.query('COMMIT');
+      return stored;
+    } catch (err) {
+      // If we haven't already rolled back (non-EventStoreError path)
+      if (!(err instanceof EventStoreError)) {
+        await client.query('ROLLBACK').catch(() => undefined);
+        throw new EventStoreError(`Failed to append events: ${String(err)}`, err);
+      }
+      throw err;
+    } finally {
+      client.release();
+    }
   }
 
   async *stream(_query: QueryDefinition, _options?: StreamOptions): AsyncGenerator<StoredEvent> {
