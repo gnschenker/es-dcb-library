@@ -121,7 +121,7 @@ T-09 + T-10 + T-11 + T-12 must be done before:
 | T-08 | Integration Test Infrastructure | `done` | — |
 | T-09 | Event Store — `load()` | `done` | — |
 | T-10 | Event Store — `append()` (no concurrency) | `done` | — |
-| T-11 | Event Store — `append()` with advisory locks | `pending` | — |
+| T-11 | Event Store — `append()` with advisory locks | `in implementation` | T-11-agent |
 | T-12 | Event Store — `stream()` | `in implementation` | T-12-agent |
 | T-13 | Public API Barrel + Build Verification | `pending` | — |
 
@@ -984,8 +984,8 @@ COMMIT
 
 ### T-11 — Event Store — `append()` with Advisory Locks
 
-**Status:** `pending`
-**Claimed by:** —
+**Status:** `in implementation`
+**Claimed by:** T-11-agent
 **Depends on:** T-10
 **Blocks:** T-13
 
