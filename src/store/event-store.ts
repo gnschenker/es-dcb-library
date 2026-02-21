@@ -53,8 +53,8 @@ export class PostgresEventStore implements EventStore {
         await client.query("SET LOCAL statement_timeout = '30s'");
 
         // Acquire per-stream advisory lock (non-blocking)
-        const lockQuery = options.concurrencyQuery ?? options.query;
-        const canonicalKey = compileCanonicalKey(lockQuery);
+        const concurrencyTarget = options.concurrencyQuery ?? options.query;
+        const canonicalKey = compileCanonicalKey(concurrencyTarget);
         const lockResult = await client.query<{ acquired: boolean }>(
           'SELECT pg_try_advisory_xact_lock(hashtext($1)) AS acquired',
           [canonicalKey]
@@ -70,8 +70,7 @@ export class PostgresEventStore implements EventStore {
         }
 
         // Version check
-        const versionQuery = options.concurrencyQuery ?? options.query;
-        const { sql: versionSql, params: versionParams } = compileVersionCheckQuery(versionQuery);
+        const { sql: versionSql, params: versionParams } = compileVersionCheckQuery(concurrencyTarget);
         const versionResult = await client.query<{ max_pos: string }>(versionSql, versionParams as unknown[]);
         const actualVersion = BigInt(versionResult.rows[0]!.max_pos);
         if (actualVersion !== options.expectedVersion) {
