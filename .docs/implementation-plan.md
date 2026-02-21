@@ -113,11 +113,11 @@ T-09 + T-10 + T-11 + T-12 must be done before:
 |----|-------|--------|------------|
 | T-01 | Project Scaffolding | `done` | — |
 | T-02 | Query Internal Types | `done` | — |
-| T-03 | Query Builder | `pending` | — |
+| T-03 | Query Builder | `in implementation` | T-03-agent |
 | T-04 | Query Compiler | `pending` | — |
 | T-05 | Core Types & Errors | `pending` | — |
 | T-06 | Database Schema DDL | `done` | — |
-| T-07 | Row Mapper | `pending` | — |
+| T-07 | Row Mapper | `in implementation` | T-07-agent |
 | T-08 | Integration Test Infrastructure | `done` | — |
 | T-09 | Event Store — `load()` | `pending` | — |
 | T-10 | Event Store — `append()` (no concurrency) | `pending` | — |
@@ -254,8 +254,8 @@ All assertions must be validated by `npm run typecheck` with `strict: true`.
 
 ### T-03 — Query Builder
 
-**Status:** `pending`
-**Claimed by:** —
+**Status:** `in implementation`
+**Claimed by:** T-03-agent
 **Depends on:** T-02
 **Blocks:** T-04
 
@@ -709,8 +709,8 @@ Also export the DDL constants as named strings so tests can assert on their cont
 
 ### T-07 — Row Mapper
 
-**Status:** `pending`
-**Claimed by:** —
+**Status:** `in implementation`
+**Claimed by:** T-07-agent
 **Depends on:** T-05
 **Blocks:** T-09
 
