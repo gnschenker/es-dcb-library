@@ -117,7 +117,7 @@ T-09 + T-10 + T-11 + T-12 must be done before:
 | T-04 | Query Compiler | `pending` | — |
 | T-05 | Core Types & Errors | `pending` | — |
 | T-06 | Database Schema DDL | `done` | — |
-| T-07 | Row Mapper | `in implementation` | T-07-agent |
+| T-07 | Row Mapper | `done` | — |
 | T-08 | Integration Test Infrastructure | `done` | — |
 | T-09 | Event Store — `load()` | `pending` | — |
 | T-10 | Event Store — `append()` (no concurrency) | `pending` | — |
@@ -709,8 +709,8 @@ Also export the DDL constants as named strings so tests can assert on their cont
 
 ### T-07 — Row Mapper
 
-**Status:** `in implementation`
-**Claimed by:** T-07-agent
+**Status:** `done`
+**Claimed by:** —
 **Depends on:** T-05
 **Blocks:** T-09
 
