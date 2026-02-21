@@ -120,7 +120,7 @@ T-09 + T-10 + T-11 + T-12 must be done before:
 | T-07 | Row Mapper | `done` | — |
 | T-08 | Integration Test Infrastructure | `done` | — |
 | T-09 | Event Store — `load()` | `done` | — |
-| T-10 | Event Store — `append()` (no concurrency) | `in implementation` | T-10-agent |
+| T-10 | Event Store — `append()` (no concurrency) | `done` | — |
 | T-11 | Event Store — `append()` with advisory locks | `pending` | — |
 | T-12 | Event Store — `stream()` | `in implementation` | T-12-agent |
 | T-13 | Public API Barrel + Build Verification | `pending` | — |
@@ -916,8 +916,8 @@ Setup: `beforeEach` calls `resetDatabase`.
 
 ### T-10 — Event Store — `append()` (no concurrency check)
 
-**Status:** `in implementation`
-**Claimed by:** T-10-agent
+**Status:** `done`
+**Claimed by:** —
 **Depends on:** T-09
 **Blocks:** T-11
 
