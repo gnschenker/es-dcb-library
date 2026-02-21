@@ -111,7 +111,7 @@ T-09 + T-10 + T-11 + T-12 must be done before:
 
 | ID | Title | Status | Claimed by |
 |----|-------|--------|------------|
-| T-01 | Project Scaffolding | `pending` | — |
+| T-01 | Project Scaffolding | `in implementation` | claude-sonnet-4-6 |
 | T-02 | Query Internal Types | `pending` | — |
 | T-03 | Query Builder | `pending` | — |
 | T-04 | Query Compiler | `pending` | — |
@@ -133,8 +133,8 @@ T-09 + T-10 + T-11 + T-12 must be done before:
 
 ### T-01 — Project Scaffolding
 
-**Status:** `pending`
-**Claimed by:** —
+**Status:** `in implementation`
+**Claimed by:** claude-sonnet-4-6
 **Depends on:** nothing
 **Blocks:** all other tasks
 
