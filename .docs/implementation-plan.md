@@ -112,11 +112,11 @@ T-09 + T-10 + T-11 + T-12 must be done before:
 | ID | Title | Status | Claimed by |
 |----|-------|--------|------------|
 | T-01 | Project Scaffolding | `done` | — |
-| T-02 | Query Internal Types | `pending` | — |
+| T-02 | Query Internal Types | `done` | — |
 | T-03 | Query Builder | `pending` | — |
 | T-04 | Query Compiler | `pending` | — |
-| T-05 | Core Types & Errors | `pending` | — |
-| T-06 | Database Schema DDL | `pending` | — |
+| T-05 | Core Types & Errors | `done` | — |
+| T-06 | Database Schema DDL | `done` | — |
 | T-07 | Row Mapper | `pending` | — |
 | T-08 | Integration Test Infrastructure | `pending` | — |
 | T-09 | Event Store — `load()` | `pending` | — |
@@ -506,7 +506,7 @@ LIMIT $M
 
 ### T-05 — Core Types & Errors
 
-**Status:** `pending`
+**Status:** `done`
 **Claimed by:** —
 **Depends on:** T-01
 **Blocks:** T-07, T-09
@@ -619,7 +619,7 @@ export class EventStoreError extends Error {
 
 ### T-06 — Database Schema DDL
 
-**Status:** `pending`
+**Status:** `done`
 **Claimed by:** —
 **Depends on:** T-01
 **Blocks:** T-09
