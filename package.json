@@ -28,8 +28,8 @@
     "build": "tsup",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:unit": "vitest run tests/unit --passWithNoTests",
-    "test:integration": "vitest run tests/integration --passWithNoTests",
+    "test:unit": "vitest run --project unit --passWithNoTests",
+    "test:integration": "vitest run --project integration --passWithNoTests",
     "test:watch": "vitest"
   },
   "dependencies": {
