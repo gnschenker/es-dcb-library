@@ -70,25 +70,27 @@ describe('applyProjectionSchema()', () => {
     // Listen for notifications on a dedicated client
     const listenClient = new pg.Client({ connectionString: process.env['TEST_DATABASE_URL'] });
     await listenClient.connect();
-    await listenClient.query('LISTEN es_events');
 
     let notificationCount = 0;
-    listenClient.on('notification', () => {
-      notificationCount++;
-    });
+    try {
+      await listenClient.query('LISTEN es_events');
+      listenClient.on('notification', () => {
+        notificationCount++;
+      });
 
-    // Append 3 events in one call (multi-event append)
-    await store.append([
-      { type: 'TestEvent', payload: { id: '1' } },
-      { type: 'TestEvent', payload: { id: '2' } },
-      { type: 'TestEvent', payload: { id: '3' } },
-    ]);
+      // Append 3 events in one call (multi-event append)
+      await store.append([
+        { type: 'TestEvent', payload: { id: '1' } },
+        { type: 'TestEvent', payload: { id: '2' } },
+        { type: 'TestEvent', payload: { id: '3' } },
+      ]);
 
-    // Wait up to 500ms for notification
-    await new Promise<void>((resolve) => setTimeout(resolve, 500));
-
-    await listenClient.query('UNLISTEN es_events');
-    await listenClient.end();
+      // Wait up to 500ms for notification
+      await new Promise<void>((resolve) => setTimeout(resolve, 500));
+    } finally {
+      await listenClient.query('UNLISTEN es_events').catch(() => undefined);
+      await listenClient.end();
+    }
 
     // FOR EACH STATEMENT means exactly 1 notification for 3 rows
     expect(notificationCount).toBe(1);
@@ -97,21 +99,23 @@ describe('applyProjectionSchema()', () => {
   it('NOTIFY is received within 500ms of store.append()', async () => {
     const listenClient = new pg.Client({ connectionString: process.env['TEST_DATABASE_URL'] });
     await listenClient.connect();
-    await listenClient.query('LISTEN es_events');
 
     let received = false;
-    listenClient.on('notification', () => { received = true; });
+    try {
+      await listenClient.query('LISTEN es_events');
+      listenClient.on('notification', () => { received = true; });
 
-    const start = Date.now();
-    await store.append({ type: 'PingEvent', payload: {} });
+      const start = Date.now();
+      await store.append({ type: 'PingEvent', payload: {} });
 
-    // Poll until received or 500ms elapsed
-    while (!received && Date.now() - start < 500) {
-      await new Promise<void>((resolve) => setTimeout(resolve, 20));
+      // Poll until received or 500ms elapsed
+      while (!received && Date.now() - start < 500) {
+        await new Promise<void>((resolve) => setTimeout(resolve, 20));
+      }
+    } finally {
+      await listenClient.query('UNLISTEN es_events').catch(() => undefined);
+      await listenClient.end();
     }
-
-    await listenClient.query('UNLISTEN es_events');
-    await listenClient.end();
 
     expect(received).toBe(true);
   });
