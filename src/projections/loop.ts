@@ -1,5 +1,5 @@
 import type pg from 'pg';
-import type { StoredEvent } from '../types.js';
+import type { StoredEvent, EventStore } from '../types.js';
 import type { ProjectionDefinition } from './types.js';
 
 /** Internal: sleep for ms milliseconds */
@@ -113,5 +113,41 @@ export async function processEventWithRetry(
       }
       await sleep(nextDelayMs);
     }
+  }
+}
+
+/**
+ * Phase 1: Catch-up loop.
+ * Streams all matching events from state.lastPos onward, processes each,
+ * and updates state.lastPos. Stops if stopRequested is set.
+ *
+ * Uses keyset pagination via store.stream() — no long-lived transactions,
+ * no server-side cursors. Safe to stop early.
+ */
+export async function runCatchUp(
+  def: ProjectionDefinition,
+  store: EventStore,
+  pool: pg.Pool,
+  state: ProjectionLoopState,
+  config: ResolvedConfig,
+): Promise<void> {
+  const oldStatus = state.status;
+  state.status = 'catching-up';
+  try {
+    config.onStatusChange?.(def.name, oldStatus, 'catching-up');
+  } catch {
+    // swallow
+  }
+
+  const eventStream = store.stream(def.query, {
+    afterPosition: state.lastPos,
+    batchSize: config.streamBatchSize,
+  });
+
+  for await (const event of eventStream) {
+    if (state.stopRequested) break;
+    await processEventWithRetry(def, event, pool, state, config);
+    state.lastPos = event.globalPosition;
+    state.lastUpdatedAt = new Date();
   }
 }
