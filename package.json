@@ -16,6 +16,16 @@
         "types": "./dist/index.d.cts",
         "default": "./dist/index.cjs"
       }
+    },
+    "./projections": {
+      "import": {
+        "types": "./dist/projections/index.d.ts",
+        "default": "./dist/projections/index.js"
+      },
+      "require": {
+        "types": "./dist/projections/index.d.cts",
+        "default": "./dist/projections/index.cjs"
+      }
     }
   },
   "files": [
