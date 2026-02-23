@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import type { EventStore, StoredEvent } from 'es-dcb-library';
 import { query } from 'es-dcb-library';
+import type pg from 'pg';
 import type { Clock } from '../../domain/clock.js';
 import { hireTeacher } from '../../commands/hire-teacher.js';
 import { dismissTeacher } from '../../commands/dismiss-teacher.js';
@@ -43,6 +44,7 @@ export async function registerTeacherRoutes(
   app: FastifyInstance,
   store: EventStore,
   clock: Clock,
+  readPool?: pg.Pool,
 ): Promise<void> {
   // POST /teachers — hire a teacher
   app.post('/teachers', async (request, reply) => {
@@ -62,6 +64,35 @@ export async function registerTeacherRoutes(
   // GET /teachers/:teacherId — read teacher state
   app.get('/teachers/:teacherId', async (request, reply) => {
     const { teacherId } = request.params as { teacherId: string };
+
+    if (readPool) {
+      // Projection-backed read model — O(1) indexed SELECT
+      const result = await readPool.query<{
+        teacher_id: string;
+        name: string;
+        email: string;
+        department: string;
+        status: string;
+        hired_at: string;
+        dismissed_at: string | null;
+      }>(
+        'SELECT teacher_id, name, email, department, status, hired_at, dismissed_at FROM read_teachers WHERE teacher_id = $1',
+        [teacherId],
+      );
+      const row = result.rows[0];
+      if (!row) return reply.status(404).send({ error: 'Teacher not found' });
+      return reply.send({
+        teacherId: row.teacher_id,
+        name: row.name,
+        email: row.email,
+        department: row.department,
+        status: row.status,
+        hiredAt: row.hired_at,
+        dismissedAt: row.dismissed_at ?? undefined,
+      });
+    }
+
+    // Fallback: event replay (used when readPool not provided, e.g. in tests)
     const { events } = await store.load(teacherStream(teacherId));
     const state = reduceTeacherForRead(events);
     if (state.status === 'none') {
