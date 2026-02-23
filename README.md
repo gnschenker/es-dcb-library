@@ -2,8 +2,6 @@
 
 A TypeScript event sourcing library implementing the **Dynamic Context Boundaries (DCB)** pattern. Instead of traditional aggregates with fixed, pre-defined boundaries, context is defined dynamically at query time using a fluent DSL. The store is backed by PostgreSQL.
 
-> **Status:** Under active development — see [`.docs/implementation-plan.md`](.docs/implementation-plan.md) for progress.
-
 ---
 
 ## What is DCB?
@@ -33,6 +31,7 @@ This makes it straightforward to handle decisions that cross what would traditio
 - **Single PostgreSQL table** — simple schema, easy to inspect and migrate
 - **Dual ESM + CJS output** — works in both `import` and `require` environments
 - **No ORM** — raw parameterized SQL, full control over query shapes and indexes
+- **Projections addon** — asynchronous read-model materialisation with LISTEN/NOTIFY and automatic catch-up
 
 ---
 
@@ -308,7 +307,220 @@ Autovacuum thresholds are tightened at schema-init time (`scale_factor=0.01`) so
 
 ---
 
-## Development
+## Projections
+
+The projections addon (`es-dcb-library/projections`) materialises pre-computed read models into PostgreSQL tables and keeps them up to date asynchronously as new events are appended.
+
+### Why projections?
+
+Command handlers always need a fresh, consistent view of state — they replay events on every call. Read endpoints don't: eventual consistency is acceptable and replaying hundreds of events per HTTP request is wasteful. Projections solve this:
+
+```
+Without projections — GET /courses/:id/enrollments with N students:
+  store.load(courseStream)                    1 query
+  store.load(enrollmentStream) × N students   N queries
+                                              = N+2 queries per request
+
+With projections:
+  readPool.query('SELECT * FROM read_enrollments WHERE course_id = $1')
+                                              = 1 indexed SELECT
+```
+
+### Quick start
+
+```typescript
+import { PostgresEventStore, query } from 'es-dcb-library';
+import {
+  defineProjection,
+  createEventDispatcher,
+  ProjectionManager,
+} from 'es-dcb-library/projections';
+import pg from 'pg';
+
+// 1. Define a projection
+const teachersProjection = defineProjection({
+  name: 'teachers-read-model',
+
+  query: query.eventsOfType('TeacherHired').eventsOfType('TeacherDismissed'),
+
+  async setup(client) {
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS read_teachers (
+        teacher_id   TEXT PRIMARY KEY,
+        name         TEXT NOT NULL,
+        status       TEXT NOT NULL
+      )
+    `);
+  },
+
+  handler: createEventDispatcher({
+    TeacherHired: async (payload, _event, client) => {
+      await client.query(
+        `INSERT INTO read_teachers (teacher_id, name, status)
+         VALUES ($1, $2, 'hired')
+         ON CONFLICT (teacher_id) DO UPDATE SET name = $2, status = 'hired'`,
+        [payload['teacherId'], payload['name']],
+      );
+    },
+    TeacherDismissed: async (payload, _event, client) => {
+      await client.query(
+        `UPDATE read_teachers SET status = 'dismissed' WHERE teacher_id = $1`,
+        [payload['teacherId']],
+      );
+    },
+  }),
+});
+
+// 2. Wire up the manager
+const pool  = new pg.Pool({ connectionString: process.env.DATABASE_URL });
+const store = new PostgresEventStore({ pool });
+
+await store.initializeSchema();
+
+const manager = new ProjectionManager({
+  pool,
+  store,
+  projections: [teachersProjection],
+});
+
+await manager.initialize();  // DDL + setup() + checkpoints
+manager.start();             // background loops — returns immediately
+await manager.waitUntilLive(); // optional: wait for catch-up to complete
+
+// 3. Read from the materialised table — O(1) indexed SELECT
+const { rows } = await pool.query(
+  'SELECT * FROM read_teachers WHERE teacher_id = $1',
+  [teacherId],
+);
+
+// 4. Shut down gracefully
+await manager.stop();
+await store.close();
+await pool.end();
+```
+
+### `defineProjection(def)`
+
+Validates and returns a `ProjectionDefinition`. Throws if `name` is empty, does not match `/^[a-zA-Z][a-zA-Z0-9\-_]{0,127}$/`, or if `query` has no clauses.
+
+```typescript
+interface ProjectionDefinition {
+  /** Stable unique key — stored in projection_checkpoints. */
+  readonly name: string;
+
+  /** Which events drive this projection. Uses the standard query DSL. */
+  readonly query: QueryDefinition;
+
+  /**
+   * Optional: run idempotent DDL (CREATE TABLE IF NOT EXISTS).
+   * Called once during manager.initialize(). Must not begin/commit transactions.
+   */
+  readonly setup?: (client: pg.PoolClient) => Promise<void>;
+
+  /**
+   * Called once per matching event inside an open transaction.
+   * The checkpoint update is committed in the same transaction — atomically.
+   * Must NOT call BEGIN, COMMIT, or ROLLBACK.
+   * Must be idempotent — at-least-once delivery is guaranteed.
+   */
+  readonly handler: (event: StoredEvent, client: pg.PoolClient) => Promise<void>;
+}
+```
+
+### `createEventDispatcher(handlers)`
+
+Convenience factory that builds a `ProjectionHandler` dispatching by `event.type`. Events with no matching handler are silently skipped.
+
+```typescript
+handler: createEventDispatcher({
+  TeacherHired: async (payload, event, client) => { /* ... */ },
+  TeacherDismissed: async (payload, event, client) => { /* ... */ },
+})
+```
+
+Each sub-handler receives `(payload, event, client)` — the typed payload, the full `StoredEvent`, and the open transaction client.
+
+### `ProjectionManager`
+
+```typescript
+const manager = new ProjectionManager({
+  pool:             pg.Pool,               // connection pool for writes + checkpoints
+  store:            EventStore,            // from base library — provides stream()
+  projections:      ProjectionDefinition[],
+
+  // Callbacks (all optional)
+  onError?:         (name, error) => void, // called when a projection enters 'error' state
+  onRetry?:         (name, attempt, error, nextDelayMs) => void,
+  onStatusChange?:  (name, oldStatus, newStatus) => void,
+
+  // Tuning (all optional)
+  maxRetries?:      number,   // handler retry limit (default: 3)
+  retryDelayMs?:    number,   // base delay, linear: delay × attempt (default: 500 ms)
+  streamBatchSize?: number,   // events per catch-up page (default: 200)
+  pollIntervalMs?:  number,   // NOTIFY fallback poll interval (default: 5 000 ms)
+  setupTimeoutMs?:  number,   // per-projection setup() timeout (default: 30 000 ms)
+  singleInstance?:  boolean,  // advisory lock — one active node per projection
+  dryRun?:         boolean,   // call handler but always ROLLBACK (SQL validation only)
+});
+```
+
+| Method | Description |
+|--------|-------------|
+| `initialize(): Promise<void>` | Creates `projection_checkpoints` table + NOTIFY trigger, calls each `setup()`, inserts checkpoint rows. Idempotent — safe to call on every startup. |
+| `start(): void` | Spawns background catch-up → live loops for every projection. Returns immediately. |
+| `stop(): Promise<void>` | Signals all loops to stop; waits for in-flight handlers to finish; releases connections. |
+| `waitUntilLive(timeoutMs?): Promise<void>` | Resolves when every projection reaches `'live'`, `'error'`, or `'stopped'`. Default timeout: 60 s. |
+| `waitForPosition(name, position, timeoutMs?): Promise<void>` | Resolves when the named projection's checkpoint reaches the target position. Default timeout: 5 s. |
+| `restart(name): Promise<void>` | Re-starts a projection that is in `'error'` state. Re-reads the checkpoint and spawns a new loop. |
+| `getStatus(): ProjectionState[]` | Returns a snapshot of all projection states. |
+
+```typescript
+type ProjectionStatus = 'pending' | 'catching-up' | 'live' | 'error' | 'stopped';
+
+interface ProjectionState {
+  name: string;
+  status: ProjectionStatus;
+  lastProcessedPosition: bigint;
+  lastUpdatedAt: Date | null;
+  errorDetail?: unknown;
+}
+```
+
+### How it works
+
+Each projection runs an independent async loop with two phases:
+
+**Phase 1 — Catch-up:** streams all matching events from the last checkpoint position using keyset pagination (`store.stream()`). Each event is processed atomically — the handler write and the checkpoint update commit together in a single PostgreSQL transaction.
+
+**Phase 2 — Live:** listens for `NOTIFY` signals from a trigger on the `events` table. On each signal (or poll timeout), streams any new events from the latest checkpoint. The shared LISTEN client is started before any loops begin, closing the window between catch-up and live.
+
+**Retry:** if a handler throws, it is retried up to `maxRetries` times with linear backoff (`retryDelayMs × attempt`). If all retries fail the projection enters `'error'` state; other projections are unaffected.
+
+**Atomicity:** because the handler and checkpoint update share one transaction, a crash after `COMMIT` means the event is not replayed; a crash before `COMMIT` means both are rolled back and the event is replayed. Handlers must therefore be **idempotent** — use `INSERT … ON CONFLICT DO UPDATE`.
+
+### Additional schema objects
+
+`manager.initialize()` creates two objects beyond the checkpoints table:
+
+```sql
+-- Checkpoint table
+CREATE TABLE IF NOT EXISTS projection_checkpoints (
+  name          TEXT        PRIMARY KEY,
+  last_position BIGINT,
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Trigger: fires once per INSERT statement on the events table
+CREATE OR REPLACE TRIGGER trg_es_events_notify
+  AFTER INSERT ON events
+  FOR EACH STATEMENT
+  EXECUTE FUNCTION es_notify_event_inserted();
+-- (function sends NOTIFY on channel 'es_events')
+```
+
+The trigger fires per-statement (not per-row) so a bulk `append([e1, e2, e3])` sends exactly one notification — no thundering herd.
+
+---
 
 ```bash
 npm install
@@ -347,6 +559,12 @@ src/
     schema.ts           DDL + applySchema()
     row-mapper.ts       pg row → StoredEvent
     event-store.ts      PostgresEventStore
+  projections/
+    index.ts            Projections subpath barrel (es-dcb-library/projections)
+    types.ts            defineProjection(), createEventDispatcher(), all public types
+    schema.ts           DDL constants + applyProjectionSchema()
+    loop.ts             Internal: processEvent, runCatchUp, runLive, runProjectionLoop, ManagedListenClient
+    manager.ts          ProjectionManager class
 
 tests/
   unit/                 Pure unit tests — no database
@@ -376,6 +594,8 @@ Business rules span what would traditionally be multiple aggregates — for exam
 
 The app follows a **vertical slice** pattern — each command handler (`hire-teacher.ts`, `enroll-student.ts`, etc.) defines its own private stream queries and exported reducer functions. No shared state, no cross-slice imports. The Fastify HTTP layer is a thin wrapper that delegates entirely to the command handlers.
 
+The app also demonstrates the projections addon: a `teachers-read-model` projection materialises hired/dismissed teacher state into a `read_teachers` table. The `GET /teachers/:id` route reads from that table when available, falling back to event replay otherwise.
+
 ```
 university-app/src/
   commands/          12 command handlers (one file per use-case)
@@ -383,8 +603,10 @@ university-app/src/
   api/
     routes/          Fastify route registration (teachers, courses, students)
     middleware/      Error-to-HTTP-status mapping
+  projections/
+    teachers-read-model.ts   Teachers projection (defineProjection example)
   server.ts          Fastify factory (testable — accepts EventStore interface)
-  index.ts           Entry point (DATABASE_URL, PORT from environment)
+  index.ts           Entry point — wires ProjectionManager, waits until live before listening
 ```
 
 ### Running with Docker Compose
