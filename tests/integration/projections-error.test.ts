@@ -93,6 +93,7 @@ describe('projections — error handling and retry', () => {
     const status = manager.getStatus().find((s) => s.name === 'retry-test');
     expect(status?.status).toBe('live');
   });
+
   it('maxRetries exhausted => error state, onError called with projection name', async () => {
     await store.append({ type: 'ErrorEvt', payload: {} });
 
@@ -156,6 +157,7 @@ describe('projections — error handling and retry', () => {
     await waitForStatus(manager, 'throwing-onerror', 'error');
     expect(manager.getStatus().find((s) => s.name === 'throwing-onerror')?.status).toBe('error');
   });
+
   it('other projections continue processing when one enters error state', async () => {
     await store.append([
       { type: 'GoodEvt', payload: { id: 'g1' } },
@@ -202,6 +204,7 @@ describe('projections — error handling and retry', () => {
     expect(manager.getStatus().find((s) => s.name === 'good-proj')?.status).toBe('live');
     expect(processedGood).toContain('g1');
   });
+
   it('restart() recovers error projection, re-reads checkpoint, returns to live', async () => {
     await store.append({ type: 'RestartEvt', payload: {} });
 
