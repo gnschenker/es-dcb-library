@@ -6,18 +6,18 @@ import {
   reduceEnrollmentForEnroll,
   reduceEnrollmentCountForEnroll,
   enrollStudent,
-} from '../../src/commands/enroll-student.js';
+} from '../enroll-student.js';
 import {
   reduceEnrollmentForUnenroll,
   reduceCourseForUnenroll,
   unenrollStudent,
-} from '../../src/commands/unenroll-student.js';
+} from '../unenroll-student.js';
 import {
   reduceEnrollmentForGrade,
   reduceCourseForGrade,
   reduceTeacherForGrade,
   gradeStudent,
-} from '../../src/commands/grade-student.js';
+} from '../grade-student.js';
 import {
   StudentNotFoundError,
   CourseNotFoundError,
@@ -31,8 +31,8 @@ import {
   InvalidGradeError,
   WrongTeacherError,
   TeacherDismissedError,
-} from '../../src/domain/errors.js';
-import { systemClock } from '../../src/domain/clock.js';
+} from '../../../domain/errors.js';
+import { systemClock } from '../../../domain/clock.js';
 
 let pos = 1n;
 function makeEvent(type: string, payload: Record<string, unknown>): StoredEvent {

@@ -1,9 +1,9 @@
 import type { EventStore, StoredEvent, NewEvent } from 'es-dcb-library';
 import { query } from 'es-dcb-library';
-import type { Clock } from '../domain/clock.js';
-import { teacherIdFromEmail } from '../domain/ids.js';
-import { TeacherAlreadyHiredError } from '../domain/errors.js';
-import type { TeacherHiredPayload } from '../domain/events.js';
+import type { Clock } from '../../domain/clock.js';
+import { teacherIdFromEmail } from '../../domain/ids.js';
+import { TeacherAlreadyHiredError } from '../../domain/errors.js';
+import type { TeacherHiredPayload } from '../../domain/events.js';
 
 // Private to this slice
 function teacherStream(teacherId: string) {

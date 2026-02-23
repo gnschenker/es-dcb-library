@@ -1,19 +1,19 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { query } from 'es-dcb-library';
-import { createTestStore, clearEvents } from './helpers.js';
-import { systemClock } from '../../src/domain/clock.js';
-import { teacherIdFromEmail } from '../../src/domain/ids.js';
-import { hireTeacher } from '../../src/commands/hire-teacher.js';
-import { dismissTeacher } from '../../src/commands/dismiss-teacher.js';
-import { createCourse } from '../../src/commands/create-course.js';
-import { assignTeacher } from '../../src/commands/assign-teacher.js';
-import { publishCourse } from '../../src/commands/publish-course.js';
+import { createTestStore, clearEvents } from '../../../../tests/integration/helpers.js';
+import { systemClock } from '../../../domain/clock.js';
+import { teacherIdFromEmail } from '../../../domain/ids.js';
+import { hireTeacher } from '../../teachers/hire-teacher.js';
+import { dismissTeacher } from '../../teachers/dismiss-teacher.js';
+import { createCourse } from '../../courses/create-course.js';
+import { assignTeacher } from '../../teachers/assign-teacher.js';
+import { publishCourse } from '../../courses/publish-course.js';
 import {
   TeacherAlreadyHiredError,
   TeacherNotFoundError,
   TeacherDismissedError,
   TeacherAssignedToOpenCourseError,
-} from '../../src/domain/errors.js';
+} from '../../../domain/errors.js';
 
 const TEACHER = { name: 'Dr. Smith', email: 'smith@uni.edu', department: 'CS' };
 const COURSE = {

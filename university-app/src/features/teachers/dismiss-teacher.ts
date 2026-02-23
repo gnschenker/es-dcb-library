@@ -1,15 +1,15 @@
 import type { EventStore, StoredEvent, NewEvent } from 'es-dcb-library';
 import { query } from 'es-dcb-library';
-import type { Clock } from '../domain/clock.js';
+import type { Clock } from '../../domain/clock.js';
 import {
   TeacherNotFoundError,
   TeacherDismissedError,
   TeacherAssignedToOpenCourseError,
-} from '../domain/errors.js';
+} from '../../domain/errors.js';
 import type {
   TeacherDismissedPayload,
   TeacherRemovedFromCoursePayload,
-} from '../domain/events.js';
+} from '../../domain/events.js';
 
 // Private to this slice
 function teacherStream(teacherId: string) {

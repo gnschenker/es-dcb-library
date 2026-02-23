@@ -1,9 +1,9 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { createTestStore, clearEvents } from './helpers.js';
-import { systemClock } from '../../src/domain/clock.js';
-import { studentIdFromEmail } from '../../src/domain/ids.js';
-import { registerStudent } from '../../src/commands/register-student.js';
-import { StudentAlreadyRegisteredError } from '../../src/domain/errors.js';
+import { createTestStore, clearEvents } from '../../../../tests/integration/helpers.js';
+import { systemClock } from '../../../domain/clock.js';
+import { studentIdFromEmail } from '../../../domain/ids.js';
+import { registerStudent } from '../register-student.js';
+import { StudentAlreadyRegisteredError } from '../../../domain/errors.js';
 
 const STUDENT = { name: 'Alice', email: 'alice@student.edu', dateOfBirth: '2000-01-01' };
 

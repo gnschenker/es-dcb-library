@@ -1,6 +1,6 @@
 import type { EventStore, StoredEvent, NewEvent } from 'es-dcb-library';
 import { query } from 'es-dcb-library';
-import type { Clock } from '../domain/clock.js';
+import type { Clock } from '../../domain/clock.js';
 import {
   StudentNotFoundError,
   CourseNotFoundError,
@@ -8,8 +8,8 @@ import {
   StudentAlreadyEnrolledError,
   EnrollmentFullError,
   PrerequisiteNotSatisfiedError,
-} from '../domain/errors.js';
-import type { StudentEnrolledPayload } from '../domain/events.js';
+} from '../../domain/errors.js';
+import type { StudentEnrolledPayload } from '../../domain/events.js';
 
 // Private to this slice
 function studentStream(studentId: string) {

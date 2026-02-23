@@ -1,19 +1,19 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { StoredEvent, EventStore } from 'es-dcb-library';
-import { reduceTeacher as reduceTeacherForHire } from '../../src/commands/hire-teacher.js';
-import { hireTeacher } from '../../src/commands/hire-teacher.js';
+import { reduceTeacher as reduceTeacherForHire } from '../hire-teacher.js';
+import { hireTeacher } from '../hire-teacher.js';
 import {
   reduceTeacher as reduceTeacherForDismiss,
   reduceCourseForDismiss,
-} from '../../src/commands/dismiss-teacher.js';
-import { dismissTeacher } from '../../src/commands/dismiss-teacher.js';
+} from '../dismiss-teacher.js';
+import { dismissTeacher } from '../dismiss-teacher.js';
 import {
   TeacherAlreadyHiredError,
   TeacherNotFoundError,
   TeacherDismissedError,
   TeacherAssignedToOpenCourseError,
-} from '../../src/domain/errors.js';
-import { systemClock } from '../../src/domain/clock.js';
+} from '../../../domain/errors.js';
+import { systemClock } from '../../../domain/clock.js';
 
 let pos = 1n;
 function makeEvent(type: string, payload: Record<string, unknown>): StoredEvent {

@@ -1,18 +1,18 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { StoredEvent, EventStore } from 'es-dcb-library';
-import { createCourse } from '../../src/commands/create-course.js';
-import { reduceCourseForPublish, reduceTeacherForPublish } from '../../src/commands/publish-course.js';
-import { reduceCourseForClose, reduceEnrollmentForClose } from '../../src/commands/close-course.js';
-import { reduceCourseForCancel, reduceEnrollmentForCancel } from '../../src/commands/cancel-course.js';
-import { reduceCourseForAssign, reduceTeacherForAssign } from '../../src/commands/assign-teacher.js';
-import { reduceCourseForRemove, reduceEnrollmentForRemove } from '../../src/commands/remove-teacher.js';
+import { createCourse } from '../create-course.js';
+import { reduceCourseForPublish, reduceTeacherForPublish } from '../publish-course.js';
+import { reduceCourseForClose, reduceEnrollmentForClose } from '../close-course.js';
+import { reduceCourseForCancel, reduceEnrollmentForCancel } from '../cancel-course.js';
+import { reduceCourseForAssign, reduceTeacherForAssign } from '../../teachers/assign-teacher.js';
+import { reduceCourseForRemove, reduceEnrollmentForRemove } from '../../teachers/remove-teacher.js';
 import {
   InvalidCreditHoursError,
   InvalidMaxStudentsError,
   InvalidPassingGradeError,
   PrerequisiteNotFoundError,
-} from '../../src/domain/errors.js';
-import { systemClock } from '../../src/domain/clock.js';
+} from '../../../domain/errors.js';
+import { systemClock } from '../../../domain/clock.js';
 
 let pos = 1n;
 function makeEvent(type: string, payload: Record<string, unknown>): StoredEvent {

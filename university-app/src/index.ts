@@ -3,7 +3,7 @@ import { createStore } from './store.js';
 import { systemClock } from './domain/clock.js';
 import { buildServer } from './api/server.js';
 import { ProjectionManager } from 'es-dcb-library/projections';
-import { teachersProjection } from './projections/teachers-read-model.js';
+import { teachersProjection } from './features/teachers/read-model.js';
 
 const DATABASE_URL = process.env['DATABASE_URL'];
 if (!DATABASE_URL) {

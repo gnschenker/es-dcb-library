@@ -3,8 +3,8 @@ import type { EventStore, StoredEvent } from 'es-dcb-library';
 import { query } from 'es-dcb-library';
 import type pg from 'pg';
 import type { Clock } from '../../domain/clock.js';
-import { hireTeacher } from '../../commands/hire-teacher.js';
-import { dismissTeacher } from '../../commands/dismiss-teacher.js';
+import { hireTeacher } from './hire-teacher.js';
+import { dismissTeacher } from './dismiss-teacher.js';
 
 function teacherStream(teacherId: string) {
   return query
