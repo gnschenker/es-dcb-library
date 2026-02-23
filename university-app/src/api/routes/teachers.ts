@@ -80,7 +80,7 @@ export async function registerTeacherRoutes(
         [teacherId],
       );
       const row = result.rows[0];
-      if (!row) return reply.status(404).send({ error: 'Teacher not found' });
+      if (!row) return reply.status(404).send({ error: 'TeacherNotFoundError', message: `Teacher '${teacherId}' not found` });
       return reply.send({
         teacherId: row.teacher_id,
         name: row.name,
