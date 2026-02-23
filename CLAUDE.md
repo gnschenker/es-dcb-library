@@ -59,6 +59,13 @@ src/store/
   event-store.ts    PostgresEventStore — the concrete EventStore implementation
 
 src/index.ts        Public API barrel (only export from here)
+
+src/projections/    Projections addon — separate subpath export (es-dcb-library/projections)
+  index.ts          Public barrel for the projections subpath
+  types.ts          defineProjection(), createEventDispatcher(), ProjectionDefinition, handler types
+  schema.ts         DDL constants + applyProjectionSchema(client)
+  loop.ts           Internal: processEvent (atomic), runCatchUp, runLive, runProjectionLoop, ManagedListenClient
+  manager.ts        ProjectionManager class
 ```
 
 ### Query DSL
@@ -114,6 +121,20 @@ Transaction order inside `append()` with options:
 - **`pg` returns `BIGSERIAL` as strings** — always convert with `BigInt()`, never `parseInt()` (loses precision above 2^53)
 - **Dual ESM+CJS output** — `tsup` + `exports` field in `package.json` avoids the dual-package hazard
 - **`metadata` is nullable** — `undefined` in `NewEvent` becomes `NULL` in the DB; `StoredEvent.metadata` is `Record<string,unknown> | null`
+
+### Projections design decisions
+
+- **Addon, not modification** — `src/index.ts` is never touched; projections live under `src/projections/` and export from the `./projections` subpath
+- **Dedicated `pg.Client` for LISTEN** — pool connections lose LISTEN state when returned; `ManagedListenClient` holds one persistent `pg.Client` with exponential-backoff reconnect (1 s → 60 s cap)
+- **Shared LISTEN client started before loops** — gap-free guarantee: `initialize()` starts the client, then `start()` spawns loops; no notifications are missed during catch-up
+- **FOR EACH STATEMENT trigger** — one `pg_notify` per `store.append()` call regardless of batch size; prevents thundering herd
+- **NOTIFY payload is empty string** — receiver unconditionally drains from `state.lastPos`; no need to parse the payload
+- **Atomic handler + checkpoint** — `BEGIN → handler → UPDATE projection_checkpoints → COMMIT`; crash before COMMIT replays the event; handlers must be idempotent (`INSERT … ON CONFLICT DO UPDATE`)
+- **dryRun mode** — handler called in real transaction, but always rolled back; use for SQL validation without side effects
+- **singleInstance** — `pg_try_advisory_lock(hashtext(name))` (session-level, not transaction-scoped) on a dedicated `pg.Client`; client held for the life of the loop; released on `stop()` / `lockClient.end()`. Contrast with `append()` which uses `pg_try_advisory_xact_lock` (transaction-scoped, auto-released on COMMIT/ROLLBACK).
+- **`applyProjectionSchema` is internal** — `src/projections/schema.ts` exports `applyProjectionSchema(client)` at the module level (used by `ProjectionManager.initialize()` and integration tests) but it is **not** re-exported from `src/projections/index.ts`. External consumers of `es-dcb-library/projections` cannot call it directly; schema application is managed entirely through `manager.initialize()`.
+- **`Promise.allSettled` in `stop()`** — crashed loop does not block shutdown of healthy loops
+- **Per-projection loops, not shared** — isolation: slow or errored projection does not delay others
 
 ---
 
@@ -226,11 +247,13 @@ Every feature (API endpoint → command handler → events) is a **self-containe
 
 **Shared across slices (OK):**
 - `es-dcb-library` — the underlying event-store library
+- `es-dcb-library/projections` — the projections addon
 - `src/domain/events.ts` — event payload type interfaces (the inter-slice contract)
 - `src/domain/errors.ts` — domain error classes (used by the API error handler)
 - `src/domain/clock.ts` — `Clock` interface and `systemClock` (pure utility)
 - `src/domain/ids.ts` — deterministic ID generators (pure utility)
 - `src/store.ts` — `createStore` factory (infrastructure)
+- `src/projections/` — `ProjectionManager` wiring (infrastructure)
 
 **Defined inside each slice (never shared):**
 - Stream query builders (`query.eventsOfType(...)`) — every command handler defines its own
@@ -263,3 +286,4 @@ All design documents are in `.docs/`:
 | `implementation-plan.md` | Task-by-task breakdown with test specifications and status tracking |
 | `university-app-plan.md` | University app domain design: events, commands, business rules, API |
 | `university-implementation-plan.md` | University app task-by-task implementation plan |
+| `projections-plan.md` | Projections addon design: architecture, loop design, API, schema, tasks P-01–P-14 |
