@@ -131,8 +131,8 @@ Transaction order inside `append()` with options:
 - **NOTIFY payload is empty string** — receiver unconditionally drains from `state.lastPos`; no need to parse the payload
 - **Atomic handler + checkpoint** — `BEGIN → handler → UPDATE projection_checkpoints → COMMIT`; crash before COMMIT replays the event; handlers must be idempotent (`INSERT … ON CONFLICT DO UPDATE`)
 - **dryRun mode** — handler called in real transaction, but always rolled back; use for SQL validation without side effects
-- **singleInstance** — `pg_try_advisory_lock(hashtext(name))` on a dedicated `pg.Client`; client held for the life of the loop; released on `stop()` / `lockClient.end()`
-- **`applyProjectionSchema` not exported** — `ProjectionManager` owns schema end-to-end; split ownership causes inconsistency risk
+- **singleInstance** — `pg_try_advisory_lock(hashtext(name))` (session-level, not transaction-scoped) on a dedicated `pg.Client`; client held for the life of the loop; released on `stop()` / `lockClient.end()`. Contrast with `append()` which uses `pg_try_advisory_xact_lock` (transaction-scoped, auto-released on COMMIT/ROLLBACK).
+- **`applyProjectionSchema` is exported** — `src/projections/schema.ts` exports `applyProjectionSchema(client)` so callers can apply the schema independently. `ProjectionManager.initialize()` calls it internally, but it is available as a public utility.
 - **`Promise.allSettled` in `stop()`** — crashed loop does not block shutdown of healthy loops
 - **Per-projection loops, not shared** — isolation: slow or errored projection does not delay others
 

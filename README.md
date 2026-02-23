@@ -404,6 +404,12 @@ await pool.end();
 Validates and returns a `ProjectionDefinition`. Throws if `name` is empty, does not match `/^[a-zA-Z][a-zA-Z0-9\-_]{0,127}$/`, or if `query` has no clauses.
 
 ```typescript
+/** Called once per matching event inside an open transaction. */
+type ProjectionHandler = (event: StoredEvent, client: pg.PoolClient) => Promise<void>;
+
+/** Called once during initialize(). Must use IF NOT EXISTS / idempotent DDL. */
+type ProjectionSetup = (client: pg.PoolClient) => Promise<void>;
+
 interface ProjectionDefinition {
   /** Stable unique key — stored in projection_checkpoints. */
   readonly name: string;
@@ -415,7 +421,7 @@ interface ProjectionDefinition {
    * Optional: run idempotent DDL (CREATE TABLE IF NOT EXISTS).
    * Called once during manager.initialize(). Must not begin/commit transactions.
    */
-  readonly setup?: (client: pg.PoolClient) => Promise<void>;
+  readonly setup?: ProjectionSetup;
 
   /**
    * Called once per matching event inside an open transaction.
@@ -423,8 +429,17 @@ interface ProjectionDefinition {
    * Must NOT call BEGIN, COMMIT, or ROLLBACK.
    * Must be idempotent — at-least-once delivery is guaranteed.
    */
-  readonly handler: (event: StoredEvent, client: pg.PoolClient) => Promise<void>;
+  readonly handler: ProjectionHandler;
 }
+
+/** Map of event type → typed handler. Used with createEventDispatcher(). */
+type DispatchHandlers = {
+  [eventType: string]: (
+    payload: Record<string, unknown>,
+    event: StoredEvent,
+    client: pg.PoolClient,
+  ) => Promise<void>;
+};
 ```
 
 ### `createEventDispatcher(handlers)`
