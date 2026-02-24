@@ -36,7 +36,7 @@ function enrollmentStream(studentId: string, courseId: string) {
     .eventsOfType('StudentFailedCourse').where.key('studentId').equals(studentId).and.key('courseId').equals(courseId);
 }
 
-function reduceCourseForRead(events: StoredEvent[]) {
+function reduceCourseStatus(events: StoredEvent[]) {
   let state: {
     status: 'none' | 'draft' | 'open' | 'closed' | 'cancelled';
   } = { status: 'none' };
@@ -82,7 +82,7 @@ export async function registerEnrollmentRoutes(
 
     // First verify the course exists
     const { events: courseEvents } = await store.load(courseStream(courseId));
-    const courseState = reduceCourseForRead(courseEvents);
+    const courseState = reduceCourseStatus(courseEvents);
     if (courseState.status === 'none') {
       return reply.status(404).send({ error: 'CourseNotFoundError', message: `Course '${courseId}' not found` });
     }

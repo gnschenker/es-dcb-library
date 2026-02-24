@@ -5,6 +5,8 @@ import type pg from 'pg';
 import type { Clock } from '../../domain/clock.js';
 import { hireTeacher } from './hire-teacher.js';
 import { dismissTeacher } from './dismiss-teacher.js';
+import { assignTeacher } from './assign-teacher.js';
+import { removeTeacher } from './remove-teacher.js';
 
 function teacherStream(teacherId: string) {
   return query
@@ -59,6 +61,21 @@ export async function registerTeacherRoutes(
     const body = request.body as { reason: string };
     await dismissTeacher(store, clock, { teacherId, reason: body.reason ?? '' });
     return reply.status(201).send({});
+  });
+
+  // PUT /courses/:courseId/teacher — assign teacher to course
+  app.put('/courses/:courseId/teacher', async (request, reply) => {
+    const { courseId } = request.params as { courseId: string };
+    const body = request.body as { teacherId: string };
+    await assignTeacher(store, clock, { courseId, teacherId: body.teacherId });
+    return reply.status(201).send({});
+  });
+
+  // DELETE /courses/:courseId/teacher — remove teacher from course
+  app.delete('/courses/:courseId/teacher', async (request, reply) => {
+    const { courseId } = request.params as { courseId: string };
+    await removeTeacher(store, clock, { courseId });
+    return reply.status(200).send({});
   });
 
   // GET /teachers/:teacherId — read teacher state

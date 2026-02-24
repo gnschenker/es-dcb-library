@@ -6,17 +6,20 @@ The current university-app uses **horizontal layering**: commands are in `src/co
 
 The goal is to reorganize so that every file contributing to a slice lives in one place. The target is **one file per feature** — each file owns its Fastify route registration, command handler, private query builders, and state reducer. Tests live in a file alongside it.
 
-### Process naming rationale
+### Folder naming
 
-Folder names follow industry-standard higher-education process terminology (sourced from PeopleSoft Campus Solutions, SAP Student Lifecycle Management, Workday Student, HERM/EDUCAUSE, and AACRAO):
+The implementation uses simple, direct domain names for the feature folders:
 
-| Process folder | Industry term origin | Commands it owns |
-|---|---|---|
-| `academic-staffing` | "Academic Staff Management" (HERM/UCISA); "Academic Workforce Management" (SAP community) | hire-teacher, dismiss-teacher, assign-teacher, remove-teacher |
-| `curriculum-management` | "Curriculum Management" (PeopleSoft official module); Gartner market category | create-course, publish-course, close-course, cancel-course |
-| `student-lifecycle` | "Student Lifecycle Management" (SAP SLCM); "Student Lifecycle" (Workday Student) | register-student, enroll-student, unenroll-student, grade-student |
+| Folder | Commands it owns |
+|---|---|
+| `teachers` | hire-teacher, dismiss-teacher, assign-teacher, remove-teacher |
+| `courses` | create-course, publish-course, close-course, cancel-course |
+| `students` | register-student |
+| `enrollments` | enroll-student, unenroll-student, grade-student |
 
-> **Note on assign/remove teacher:** Assigning a teacher to a course is placed in `academic-staffing` because the operation is **teacher-state-driven** — the teacher must be `hired` before assignment is allowed, and `DismissTeacher` automatically removes draft-course assignments.
+> **Note on assign/remove teacher:** Assigning a teacher to a course belongs in the `teachers` slice because the operation is **teacher-state-driven** — the teacher must be `hired` before assignment is allowed, and `DismissTeacher` checks active course assignments. The `PUT /courses/:courseId/teacher` and `DELETE /courses/:courseId/teacher` routes are registered in `teachers/routes.ts`, not `courses/routes.ts`.
+
+> **Previous plan:** An earlier draft of this document proposed `academic-staffing`, `curriculum-management`, and `student-lifecycle` as folder names. The implementation chose the simpler direct names above.
 
 ---
 
@@ -39,40 +42,44 @@ university-app/
 │   │   └── middleware/
 │   │       └── error-handler.ts              # Domain error → HTTP status mapping
 │   │
-│   └── features/                             # Vertical slices — one folder per business process
+│   └── features/                             # Vertical slices — one folder per business domain
 │       │
-│       ├── academic-staffing/                # Managing teaching staff at the university
-│       │   ├── hire-teacher.ts               # Route + command + handler (self-contained slice)
-│       │   ├── hire-teacher.test.ts
+│       ├── teachers/                         # Teaching staff management
+│       │   ├── hire-teacher.ts               # Command handler (self-contained slice)
 │       │   ├── dismiss-teacher.ts
-│       │   ├── dismiss-teacher.test.ts
-│       │   ├── assign-teacher.ts
-│       │   ├── assign-teacher.test.ts
+│       │   ├── assign-teacher.ts             # Also owns PUT/DELETE /courses/:id/teacher routes
 │       │   ├── remove-teacher.ts
-│       │   ├── remove-teacher.test.ts
-│       │   ├── read-model.ts                 # Teachers projection (shared within this process)
-│       │   └── read-model.test.ts
+│       │   ├── read-model.ts                 # Teachers projection
+│       │   ├── routes.ts                     # All teacher + course-teacher-assignment routes
+│       │   └── tests/
+│       │       ├── teacher-commands.unit.test.ts
+│       │       └── teachers.integration.test.ts
 │       │
-│       ├── curriculum-management/            # Designing, publishing and archiving courses
+│       ├── courses/                          # Course lifecycle
 │       │   ├── create-course.ts
-│       │   ├── create-course.test.ts
 │       │   ├── publish-course.ts
-│       │   ├── publish-course.test.ts
 │       │   ├── close-course.ts
-│       │   ├── close-course.test.ts
 │       │   ├── cancel-course.ts
-│       │   └── cancel-course.test.ts
+│       │   ├── routes.ts
+│       │   └── tests/
+│       │       ├── course-commands.unit.test.ts
+│       │       └── courses.integration.test.ts
 │       │
-│       └── student-lifecycle/                # Student registration, enrolment and academic progress
-│           ├── register-student.ts
-│           ├── register-student.test.ts
+│       ├── students/                         # Student registration
+│       │   ├── register-student.ts
+│       │   ├── routes.ts
+│       │   └── tests/
+│       │       └── students.integration.test.ts
+│       │
+│       └── enrollments/                      # Student enrolment and academic progress
 │           ├── enroll-student.ts
-│           ├── enroll-student.test.ts
 │           ├── unenroll-student.ts
-│           ├── unenroll-student.test.ts
 │           ├── grade-student.ts
-│           ├── grade-student.test.ts
-│           └── concurrency.test.ts           # Cross-feature concurrency scenario
+│           ├── routes.ts
+│           └── tests/
+│               ├── enrollment-commands.unit.test.ts
+│               ├── enrollments.integration.test.ts
+│               └── concurrency.integration.test.ts
 │
 └── tests/
     └── integration/
@@ -87,7 +94,7 @@ university-app/
 Every `<feature>.ts` file is fully self-contained and owns four things:
 
 ```typescript
-// e.g. src/features/academic-staffing/hire-teacher.ts
+// e.g. src/features/teachers/hire-teacher.ts
 
 // 1. Private query builder (never exported — only used in this file)
 function teacherStream(teacherId: string) { ... }
@@ -128,18 +135,22 @@ await app.register(dismissTeacherRoute, { store, clock });
 
 | Old files | New single file |
 |---|---|
-| `src/commands/hire-teacher.ts` + hire route from `src/api/routes/teachers.ts` | `src/features/academic-staffing/hire-teacher.ts` |
-| `src/commands/dismiss-teacher.ts` + dismiss route from `src/api/routes/teachers.ts` | `src/features/academic-staffing/dismiss-teacher.ts` |
-| `src/commands/assign-teacher.ts` + assign route from `src/api/routes/teachers.ts` | `src/features/academic-staffing/assign-teacher.ts` |
-| `src/commands/remove-teacher.ts` + remove route from `src/api/routes/teachers.ts` | `src/features/academic-staffing/remove-teacher.ts` |
-| `src/commands/create-course.ts` + create route from `src/api/routes/courses.ts` | `src/features/curriculum-management/create-course.ts` |
-| `src/commands/publish-course.ts` + publish route from `src/api/routes/courses.ts` | `src/features/curriculum-management/publish-course.ts` |
-| `src/commands/close-course.ts` + close route from `src/api/routes/courses.ts` | `src/features/curriculum-management/close-course.ts` |
-| `src/commands/cancel-course.ts` + cancel route from `src/api/routes/courses.ts` | `src/features/curriculum-management/cancel-course.ts` |
-| `src/commands/register-student.ts` + register route from `src/api/routes/students.ts` | `src/features/student-lifecycle/register-student.ts` |
-| `src/commands/enroll-student.ts` + enroll route from `src/api/routes/courses.ts` | `src/features/student-lifecycle/enroll-student.ts` |
-| `src/commands/unenroll-student.ts` + unenroll route from `src/api/routes/courses.ts` | `src/features/student-lifecycle/unenroll-student.ts` |
-| `src/commands/grade-student.ts` + grade route from `src/api/routes/courses.ts` | `src/features/student-lifecycle/grade-student.ts` |
+| `src/commands/hire-teacher.ts` | `src/features/teachers/hire-teacher.ts` |
+| `src/commands/dismiss-teacher.ts` | `src/features/teachers/dismiss-teacher.ts` |
+| `src/commands/assign-teacher.ts` | `src/features/teachers/assign-teacher.ts` |
+| `src/commands/remove-teacher.ts` | `src/features/teachers/remove-teacher.ts` |
+| `src/api/routes/teachers.ts` (+ assign/remove routes) | `src/features/teachers/routes.ts` |
+| `src/commands/create-course.ts` | `src/features/courses/create-course.ts` |
+| `src/commands/publish-course.ts` | `src/features/courses/publish-course.ts` |
+| `src/commands/close-course.ts` | `src/features/courses/close-course.ts` |
+| `src/commands/cancel-course.ts` | `src/features/courses/cancel-course.ts` |
+| `src/api/routes/courses.ts` (course lifecycle routes) | `src/features/courses/routes.ts` |
+| `src/commands/register-student.ts` | `src/features/students/register-student.ts` |
+| `src/api/routes/students.ts` | `src/features/students/routes.ts` |
+| `src/commands/enroll-student.ts` | `src/features/enrollments/enroll-student.ts` |
+| `src/commands/unenroll-student.ts` | `src/features/enrollments/unenroll-student.ts` |
+| `src/commands/grade-student.ts` | `src/features/enrollments/grade-student.ts` |
+| `src/api/routes/courses.ts` (enrollment routes) | `src/features/enrollments/routes.ts` |
 
 ### Read endpoints (GET routes)
 
@@ -147,32 +158,32 @@ The existing GET routes in `teachers.ts`, `students.ts`, and `courses.ts` replay
 
 | Old GET route | New home |
 |---|---|
-| `GET /teachers/:teacherId` | `src/features/academic-staffing/hire-teacher.ts` (or a dedicated `get-teacher.ts` if preferred) |
-| `GET /students/:studentId` | `src/features/student-lifecycle/register-student.ts` |
-| `GET /students/:studentId/courses` | `src/features/student-lifecycle/register-student.ts` |
-| `GET /courses/:courseId` | `src/features/curriculum-management/create-course.ts` |
-| `GET /courses/:courseId/enrollments` | `src/features/student-lifecycle/enroll-student.ts` |
+| `GET /teachers/:teacherId` | `src/features/teachers/routes.ts` |
+| `GET /students/:studentId` | `src/features/students/routes.ts` |
+| `GET /students/:studentId/courses` | `src/features/students/routes.ts` |
+| `GET /courses/:courseId` | `src/features/courses/routes.ts` |
+| `GET /courses/:courseId/enrollments` | `src/features/enrollments/routes.ts` |
 
 > Read endpoints that are pure projections of a single entity's state naturally co-locate with the command that creates that entity. If a read endpoint grows complex enough to warrant its own file, it can be extracted as `get-teacher.ts` etc.
 
-### Projection: `src/projections/` → `src/features/academic-staffing/read-model.ts`
+### Projection: `src/projections/` → `src/features/teachers/read-model.ts`
 
 | Old path | New path |
 |---|---|
-| `src/projections/teachers-read-model.ts` | `src/features/academic-staffing/read-model.ts` |
+| `src/projections/teachers-read-model.ts` | `src/features/teachers/read-model.ts` |
 
 ### Tests: one test file per feature file
 
 | Old path | New path |
 |---|---|
-| `tests/unit/teacher-commands.test.ts` | split: one `.test.ts` per command in `academic-staffing/` |
-| `tests/unit/course-commands.test.ts` | split: one `.test.ts` per command in `curriculum-management/` |
-| `tests/unit/enrollment-commands.test.ts` | split: one `.test.ts` per command in `student-lifecycle/` |
-| `tests/integration/teachers.test.ts` | merged into per-command test files in `academic-staffing/` |
-| `tests/integration/courses.test.ts` | merged into per-command test files in `curriculum-management/` |
-| `tests/integration/students.test.ts` | merged into per-command test files in `student-lifecycle/` |
-| `tests/integration/enrollments.test.ts` | merged into per-command test files in `student-lifecycle/` |
-| `tests/integration/concurrency.test.ts` | `src/features/student-lifecycle/concurrency.test.ts` |
+| `tests/unit/teacher-commands.test.ts` | `src/features/teachers/tests/teacher-commands.unit.test.ts` |
+| `tests/unit/course-commands.test.ts` | `src/features/courses/tests/course-commands.unit.test.ts` |
+| `tests/unit/enrollment-commands.test.ts` | `src/features/enrollments/tests/enrollment-commands.unit.test.ts` |
+| `tests/integration/teachers.test.ts` | `src/features/teachers/tests/teachers.integration.test.ts` |
+| `tests/integration/courses.test.ts` | `src/features/courses/tests/courses.integration.test.ts` |
+| `tests/integration/students.test.ts` | `src/features/students/tests/students.integration.test.ts` |
+| `tests/integration/enrollments.test.ts` | `src/features/enrollments/tests/enrollments.integration.test.ts` |
+| `tests/integration/concurrency.test.ts` | `src/features/enrollments/tests/concurrency.integration.test.ts` |
 
 Domain-level tests (`tests/unit/domain-errors.test.ts`, `tests/unit/domain-ids.test.ts`) test shared utilities not belonging to any slice — move to `src/domain/tests/` or keep in `tests/unit/`.
 

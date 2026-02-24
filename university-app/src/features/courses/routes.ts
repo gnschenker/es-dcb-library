@@ -6,8 +6,6 @@ import { createCourse } from './create-course.js';
 import { publishCourse } from './publish-course.js';
 import { closeCourse } from './close-course.js';
 import { cancelCourse } from './cancel-course.js';
-import { assignTeacher } from '../teachers/assign-teacher.js';
-import { removeTeacher } from '../teachers/remove-teacher.js';
 
 function courseStream(courseId: string) {
   return query
@@ -86,21 +84,6 @@ export async function registerCourseRoutes(
       ...(body.passingGrade !== undefined ? { passingGrade: body.passingGrade } : {}),
     });
     return reply.status(201).send(result);
-  });
-
-  // PUT /courses/:courseId/teacher — assign teacher
-  app.put('/courses/:courseId/teacher', async (request, reply) => {
-    const { courseId } = request.params as { courseId: string };
-    const body = request.body as { teacherId: string };
-    await assignTeacher(store, clock, { courseId, teacherId: body.teacherId });
-    return reply.status(201).send({});
-  });
-
-  // DELETE /courses/:courseId/teacher — remove teacher
-  app.delete('/courses/:courseId/teacher', async (request, reply) => {
-    const { courseId } = request.params as { courseId: string };
-    await removeTeacher(store, clock, { courseId });
-    return reply.status(200).send({});
   });
 
   // POST /courses/:courseId/publish
