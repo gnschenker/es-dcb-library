@@ -105,26 +105,30 @@ export function reduceTeacher(events: StoredEvent[]): TeacherHireState { ... }
 
 // 3. Command handler
 export async function hireTeacher(store: EventStore, clock: Clock, input: HireTeacherInput) { ... }
+```
 
-// 4. Fastify route registration (exported for server.ts to register)
-export const hireTeacherRoute: FastifyPluginAsync<{ store: EventStore; clock: Clock }> =
-  async (app, { store, clock }) => {
-    app.post('/api/v1/teachers', async (req, reply) => {
-      const result = await hireTeacher(store, clock, req.body as HireTeacherInput);
-      reply.code(201).send(result);
-    });
-  };
+Routes for a domain are collected in a `routes.ts` file per slice folder and registered by `server.ts`:
+
+```typescript
+// src/features/teachers/routes.ts
+export async function registerTeacherRoutes(app, store, clock, readPool?) {
+  app.post('/teachers', ...);       // hire
+  app.post('/teachers/:id/dismiss', ...); // dismiss
+  app.put('/courses/:id/teacher', ...);   // assign (teacher-state-driven)
+  app.delete('/courses/:id/teacher', ...); // remove
+  app.get('/teachers/:id', ...);    // read
+}
 ```
 
 `server.ts` imports and registers each route plugin — it becomes the single place that wires HTTP to features, but contains no business logic:
 
 ```typescript
 // src/api/server.ts (excerpt)
-import { hireTeacherRoute }    from '../features/academic-staffing/hire-teacher.js';
-import { dismissTeacherRoute } from '../features/academic-staffing/dismiss-teacher.js';
+import { registerTeacherRoutes }    from '../features/teachers/routes.js';
+import { registerCourseRoutes }     from '../features/courses/routes.js';
 // ...
-await app.register(hireTeacherRoute,    { store, clock });
-await app.register(dismissTeacherRoute, { store, clock });
+await registerTeacherRoutes(app, store, clock, readPool);
+await registerCourseRoutes(app, store, clock);
 ```
 
 ---
@@ -231,8 +235,8 @@ Option 1 is more explicit. Recommend using `.unit.test.ts` / `.integration.test.
 ## Benefits
 
 1. **One file per feature**: opening `hire-teacher.ts` shows everything needed to understand and change that use case — the HTTP contract, the business rules, the event-store interaction
-2. **Process-navigable**: `src/features/student-lifecycle/` shows every command, route, and test for the student journey
-3. **Business language in the folder structure**: `academic-staffing`, `curriculum-management`, `student-lifecycle` reflect how the university domain operates
+2. **Domain-navigable**: `src/features/enrollments/` shows every command, route, and test for the student enrolment journey
+3. **Direct domain language in the folder structure**: `teachers`, `courses`, `students`, `enrollments` map 1:1 to the domain concepts
 4. **Co-located tests**: the test file for a feature is right next to its implementation
 5. **Slice boundaries visible in imports**: a cross-process import is immediately suspicious and easy to spot in code review
 
