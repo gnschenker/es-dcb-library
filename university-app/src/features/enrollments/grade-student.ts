@@ -1,6 +1,6 @@
 import type { EventStore, StoredEvent, NewEvent } from 'es-dcb-library';
 import { query } from 'es-dcb-library';
-import type { Clock } from '../domain/clock.js';
+import type { Clock } from '../../domain/clock.js';
 import {
   InvalidGradeError,
   StudentNotEnrolledError,
@@ -8,12 +8,12 @@ import {
   CourseNotOpenError,
   WrongTeacherError,
   TeacherDismissedError,
-} from '../domain/errors.js';
+} from '../../domain/errors.js';
 import type {
   StudentGradedPayload,
   StudentPassedCoursePayload,
   StudentFailedCoursePayload,
-} from '../domain/events.js';
+} from '../../domain/events.js';
 
 // Private to this slice
 function enrollmentStream(studentId: string, courseId: string) {

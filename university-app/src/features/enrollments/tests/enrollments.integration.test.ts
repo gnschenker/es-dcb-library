@@ -1,18 +1,18 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { query } from 'es-dcb-library';
-import { createTestStore, clearEvents } from './helpers.js';
-import { systemClock } from '../../src/domain/clock.js';
-import type { Clock } from '../../src/domain/clock.js';
-import { hireTeacher } from '../../src/commands/hire-teacher.js';
-import { createCourse } from '../../src/commands/create-course.js';
-import { publishCourse } from '../../src/commands/publish-course.js';
-import { closeCourse } from '../../src/commands/close-course.js';
-import { assignTeacher } from '../../src/commands/assign-teacher.js';
-import { registerStudent } from '../../src/commands/register-student.js';
-import { enrollStudent } from '../../src/commands/enroll-student.js';
-import { unenrollStudent } from '../../src/commands/unenroll-student.js';
-import { gradeStudent } from '../../src/commands/grade-student.js';
-import { reduceStudentForEnroll } from '../../src/commands/enroll-student.js';
+import { createTestStore, clearEvents } from '../../../../tests/integration/helpers.js';
+import { systemClock } from '../../../domain/clock.js';
+import type { Clock } from '../../../domain/clock.js';
+import { hireTeacher } from '../../teachers/hire-teacher.js';
+import { createCourse } from '../../courses/create-course.js';
+import { publishCourse } from '../../courses/publish-course.js';
+import { closeCourse } from '../../courses/close-course.js';
+import { assignTeacher } from '../../teachers/assign-teacher.js';
+import { registerStudent } from '../../students/register-student.js';
+import { enrollStudent } from '../enroll-student.js';
+import { unenrollStudent } from '../unenroll-student.js';
+import { gradeStudent } from '../grade-student.js';
+import { reduceStudentForEnroll } from '../enroll-student.js';
 import {
   CourseNotOpenError,
   StudentAlreadyEnrolledError,
@@ -22,7 +22,7 @@ import {
   UnenrollAfterDeadlineError,
   WrongTeacherError,
   CourseHasActiveEnrollmentsError,
-} from '../../src/domain/errors.js';
+} from '../../../domain/errors.js';
 
 function makeClock(date: Date): Clock {
   return { now: () => date };

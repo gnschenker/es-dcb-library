@@ -1,19 +1,21 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { StoredEvent, EventStore } from 'es-dcb-library';
-import { reduceTeacher as reduceTeacherForHire } from '../../src/commands/hire-teacher.js';
-import { hireTeacher } from '../../src/commands/hire-teacher.js';
+import { reduceTeacher as reduceTeacherForHire } from '../hire-teacher.js';
+import { hireTeacher } from '../hire-teacher.js';
 import {
   reduceTeacher as reduceTeacherForDismiss,
   reduceCourseForDismiss,
-} from '../../src/commands/dismiss-teacher.js';
-import { dismissTeacher } from '../../src/commands/dismiss-teacher.js';
+} from '../dismiss-teacher.js';
+import { dismissTeacher } from '../dismiss-teacher.js';
+import { reduceCourseForAssign, reduceTeacherForAssign } from '../assign-teacher.js';
+import { reduceCourseForRemove, reduceEnrollmentForRemove } from '../remove-teacher.js';
 import {
   TeacherAlreadyHiredError,
   TeacherNotFoundError,
   TeacherDismissedError,
   TeacherAssignedToOpenCourseError,
-} from '../../src/domain/errors.js';
-import { systemClock } from '../../src/domain/clock.js';
+} from '../../../domain/errors.js';
+import { systemClock } from '../../../domain/clock.js';
 
 let pos = 1n;
 function makeEvent(type: string, payload: Record<string, unknown>): StoredEvent {
@@ -159,6 +161,75 @@ describe('reduceCourseForDismiss', () => {
       makeEvent('CoursePublished', { courseId: 'c1', teacherId: 't1', maxStudents: 30, creditHours: 3, prerequisites: [], passingGrade: 60 }),
     ];
     expect(reduceCourseForDismiss(events).status).toBe('open');
+  });
+});
+
+// --- reduceCourseForAssign ---
+describe('reduceCourseForAssign', () => {
+  it('returns none for empty', () => expect(reduceCourseForAssign([]).status).toBe('none'));
+  it('draft after CourseCreated', () => {
+    expect(reduceCourseForAssign([makeEvent('CourseCreated', { courseId: 'c1' })]).status).toBe('draft');
+  });
+  it('open after CoursePublished', () => {
+    const events = [
+      makeEvent('CourseCreated', { courseId: 'c1' }),
+      makeEvent('CoursePublished', { courseId: 'c1', teacherId: 't1', maxStudents: 30, creditHours: 3, prerequisites: [], passingGrade: 60 }),
+    ];
+    expect(reduceCourseForAssign(events).status).toBe('open');
+  });
+});
+
+// --- reduceTeacherForAssign ---
+describe('reduceTeacherForAssign', () => {
+  it('none for empty', () => expect(reduceTeacherForAssign([]).status).toBe('none'));
+  it('hired', () => expect(reduceTeacherForAssign([makeEvent('TeacherHired', { teacherId: 't1', name: 'X', email: 'x@u.edu', department: 'CS', hiredAt: '2024-01-01T00:00:00Z' })]).status).toBe('hired'));
+  it('dismissed', () => {
+    const events = [
+      makeEvent('TeacherHired', { teacherId: 't1', name: 'X', email: 'x@u.edu', department: 'CS', hiredAt: '2024-01-01T00:00:00Z' }),
+      makeEvent('TeacherDismissed', { teacherId: 't1', reason: 'cuts', dismissedAt: '2024-02-01T00:00:00Z' }),
+    ];
+    expect(reduceTeacherForAssign(events).status).toBe('dismissed');
+  });
+});
+
+// --- reduceCourseForRemove ---
+describe('reduceCourseForRemove', () => {
+  it('returns none for empty', () => expect(reduceCourseForRemove([])).toEqual({ status: 'none' }));
+  it('tracks teacherId', () => {
+    const events = [
+      makeEvent('CourseCreated', { courseId: 'c1' }),
+      makeEvent('TeacherAssignedToCourse', { courseId: 'c1', teacherId: 't1', assignedAt: '2024-01-02T00:00:00Z' }),
+    ];
+    expect(reduceCourseForRemove(events).teacherId).toBe('t1');
+  });
+  it('teacherId null after removal', () => {
+    const events = [
+      makeEvent('CourseCreated', { courseId: 'c1' }),
+      makeEvent('TeacherAssignedToCourse', { courseId: 'c1', teacherId: 't1', assignedAt: '2024-01-02T00:00:00Z' }),
+      makeEvent('TeacherRemovedFromCourse', { courseId: 'c1', teacherId: 't1', removedAt: '2024-01-03T00:00:00Z' }),
+    ];
+    expect(reduceCourseForRemove(events).teacherId).toBeNull();
+  });
+});
+
+// --- reduceEnrollmentForRemove ---
+describe('reduceEnrollmentForRemove', () => {
+  it('returns none for empty', () => expect(reduceEnrollmentForRemove([])).toEqual({ status: 'none' }));
+  it('enrolled', () => expect(reduceEnrollmentForRemove([makeEvent('StudentEnrolled', { studentId: 's1', courseId: 'c1', enrolledAt: '2024-01-10T00:00:00Z' })]).status).toBe('enrolled'));
+  it('graded is not enrolled', () => {
+    const events = [
+      makeEvent('StudentEnrolled', { studentId: 's1', courseId: 'c1', enrolledAt: '2024-01-10T00:00:00Z' }),
+      makeEvent('StudentGraded', { studentId: 's1', courseId: 'c1', grade: 85, gradedBy: 't1', gradedAt: '2024-12-01T00:00:00Z' }),
+    ];
+    expect(reduceEnrollmentForRemove(events).status).toBe('graded');
+  });
+  it('passed is not enrolled', () => {
+    const events = [
+      makeEvent('StudentEnrolled', { studentId: 's1', courseId: 'c1', enrolledAt: '2024-01-10T00:00:00Z' }),
+      makeEvent('StudentGraded', { studentId: 's1', courseId: 'c1', grade: 85, gradedBy: 't1', gradedAt: '2024-12-01T00:00:00Z' }),
+      makeEvent('StudentPassedCourse', { studentId: 's1', courseId: 'c1', finalGrade: 85, creditHours: 3, semester: 'F24' }),
+    ];
+    expect(reduceEnrollmentForRemove(events).status).toBe('passed');
   });
 });
 

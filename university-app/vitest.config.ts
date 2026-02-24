@@ -6,14 +6,14 @@ export default defineConfig({
       {
         test: {
           name: 'unit',
-          include: ['tests/unit/**/*.test.ts'],
+          include: ['src/**/*.unit.test.ts', 'tests/unit/**/*.test.ts'],
           testTimeout: 5000,
         },
       },
       {
         test: {
           name: 'integration',
-          include: ['tests/integration/**/*.test.ts'],
+          include: ['src/**/*.integration.test.ts', 'tests/integration/**/*.test.ts'],
           testTimeout: 60000,
           // container-setup.ts starts the PostgreSQL testcontainer once per worker.
           // Using setupFiles (not globalSetup) because globalSetup env vars do not

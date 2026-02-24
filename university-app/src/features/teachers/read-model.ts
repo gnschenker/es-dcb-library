@@ -1,6 +1,6 @@
 import { defineProjection, createEventDispatcher } from 'es-dcb-library/projections';
 import { query } from 'es-dcb-library';
-import type { TeacherHiredPayload, TeacherDismissedPayload } from '../domain/events.js';
+import type { TeacherHiredPayload, TeacherDismissedPayload } from '../../domain/events.js';
 
 export const teachersProjection = defineProjection({
   name: 'teachers-read-model',

@@ -1,13 +1,13 @@
 import type { EventStore, StoredEvent, NewEvent } from 'es-dcb-library';
 import { query } from 'es-dcb-library';
-import type { Clock } from '../domain/clock.js';
+import type { Clock } from '../../domain/clock.js';
 import {
   CourseNotFoundError,
   CourseNotInDraftError,
   CourseNoTeacherError,
   TeacherDismissedError,
-} from '../domain/errors.js';
-import type { CoursePublishedPayload } from '../domain/events.js';
+} from '../../domain/errors.js';
+import type { CoursePublishedPayload } from '../../domain/events.js';
 
 // Private to this slice
 function courseStream(courseId: string) {

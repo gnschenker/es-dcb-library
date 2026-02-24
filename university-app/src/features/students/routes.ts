@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import type { EventStore, StoredEvent } from 'es-dcb-library';
 import { query } from 'es-dcb-library';
 import type { Clock } from '../../domain/clock.js';
-import { registerStudent } from '../../commands/register-student.js';
+import { registerStudent } from './register-student.js';
 
 function studentStream(studentId: string) {
   return query
