@@ -198,41 +198,79 @@ describe('PostgresEventStore - Tag Model (Integration)', () => {
   });
 
   describe('Overlapping queries with tag-based locking', () => {
-    it('serializes two overlapping queries correctly', async () => {
+    it('serializes two overlapping queries correctly with retry', async () => {
       // This tests the fix for the overlapping-query hole
       const results: string[] = [];
 
-      const writer1 = async () => {
-        const q = queryItem({ tags: ['order:o1'] });
-        const { version } = await store.load(q);
-        await new Promise(resolve => setTimeout(resolve, 50)); // Simulate work
-        await store.append(
-          { type: 'Writer1', data: {}, tags: ['order:o1', 'writer:1'] },
-          { failIfEventsMatch: q, after: version }
-        );
-        results.push('writer1');
-      };
-
-      const writer2 = async () => {
-        const q = queryItem({ tags: ['order:o1'] });
-        const { version } = await store.load(q);
-        await new Promise(resolve => setTimeout(resolve, 50)); // Simulate work
-        await store.append(
-          { type: 'Writer2', data: {}, tags: ['order:o1', 'writer:2'] },
-          { failIfEventsMatch: q, after: version }
-        );
-        results.push('writer2');
+      const writer = async (id: string) => {
+        let retries = 0;
+        const maxRetries = 5;
+        
+        while (retries < maxRetries) {
+          try {
+            const q = queryItem({ tags: ['order:o1'] });
+            const { version } = await store.load(q);
+            
+            // Simulate some work
+            await new Promise(resolve => setTimeout(resolve, 10));
+            
+            await store.append(
+              { type: `Writer${id}`, data: {}, tags: ['order:o1', `writer:${id}`] },
+              { failIfEventsMatch: q, after: version }
+            );
+            
+            results.push(`writer${id}`);
+            return; // Success
+          } catch (err) {
+            if (err instanceof Error && err.message.includes('Append condition failed')) {
+              retries++;
+              if (retries >= maxRetries) {
+                throw err;
+              }
+              // Retry with exponential backoff
+              await new Promise(resolve => setTimeout(resolve, 50 * retries));
+            } else {
+              throw err;
+            }
+          }
+        }
       };
 
       // Both try to append concurrently
-      await Promise.all([writer1(), writer2()]);
+      await Promise.all([writer('1'), writer('2')]);
 
-      // Both should succeed (one waits for the other due to tag-based locking)
+      // Both should eventually succeed (one immediately, one after retry)
       expect(results).toHaveLength(2);
 
       // Verify both events are in the store
       const finalEvents = await store.load(queryItem({ tags: ['order:o1'] }));
       expect(finalEvents.events).toHaveLength(2);
+    });
+
+    it('prevents conflicting appends to overlapping queries', async () => {
+      // Seed an initial event
+      await store.append({
+        type: 'InitialEvent',
+        data: {},
+        tags: ['order:o1'],
+      });
+
+      const { version } = await store.load(queryItem({ tags: ['order:o1'] }));
+
+      // Append another event
+      await store.append({
+        type: 'SecondEvent',
+        data: {},
+        tags: ['order:o1'],
+      });
+
+      // Try to append with stale version - should fail
+      await expect(
+        store.append(
+          { type: 'StaleAppend', data: {}, tags: ['order:o1'] },
+          { failIfEventsMatch: queryItem({ tags: ['order:o1'] }), after: version }
+        )
+      ).rejects.toThrow('Append condition failed');
     });
   });
 });
