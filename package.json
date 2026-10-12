@@ -65,9 +65,18 @@
     "test:watch": "vitest"
   },
   "peerDependencies": {
+    "@opentelemetry/api": ">=1.9.0",
     "pg": ">=8.11.0"
   },
+  "peerDependenciesMeta": {
+    "@opentelemetry/api": {
+      "optional": true
+    }
+  },
   "devDependencies": {
+    "@opentelemetry/api": "^1.9.0",
+    "@opentelemetry/sdk-metrics": "^1.30.0",
+    "@opentelemetry/sdk-trace-base": "^1.30.0",
     "@types/node": "^22.13.4",
     "@types/pg": "^8.11.10",
     "pg": "^8.13.3",

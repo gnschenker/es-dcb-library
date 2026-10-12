@@ -19,3 +19,10 @@ export type {
 export { UNTAGGED, STREAM_CURSOR_ORIGIN } from './types.js';
 
 export { ConcurrencyError, EventStoreError, MissingTagExtractorError } from './errors.js';
+
+export type { ObservabilityConfig, DcbObservability } from './observability/index.js';
+export {
+  createObservability,
+  INSTRUMENTATION_SCOPE_NAME,
+  INSTRUMENTATION_VERSION,
+} from './observability/index.js';

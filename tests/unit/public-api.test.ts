@@ -18,6 +18,17 @@ describe('Public API exports', () => {
     expect(EventStoreError).toBeDefined();
   });
 
+  it('exports observability helpers', async () => {
+    const {
+      createObservability,
+      INSTRUMENTATION_SCOPE_NAME,
+      INSTRUMENTATION_VERSION,
+    } = await import('../../src/index.js');
+    expect(createObservability).toBeDefined();
+    expect(INSTRUMENTATION_SCOPE_NAME).toBe('es-dcb-library');
+    expect(INSTRUMENTATION_VERSION).toBeDefined();
+  });
+
   it('exports types', async () => {
     // Type-only exports verified at compile time
     const mod = await import('../../src/index.js');
