@@ -1,5 +1,5 @@
 import type { EventStore, StoredEvent, NewEvent } from 'es-dcb-library';
-import { query } from 'es-dcb-library';
+import { query, queryItem } from 'es-dcb-library';
 import type { Clock } from '../../domain/clock.js';
 import {
   CourseNotFoundError,
@@ -11,19 +11,21 @@ import type { CoursePublishedPayload } from '../../domain/events.js';
 
 // Private to this slice
 function courseStream(courseId: string) {
-  return query
-    .eventsOfType('CourseCreated').where.key('courseId').equals(courseId)
-    .eventsOfType('CoursePublished').where.key('courseId').equals(courseId)
-    .eventsOfType('CourseClosed').where.key('courseId').equals(courseId)
-    .eventsOfType('CourseCancelled').where.key('courseId').equals(courseId)
-    .eventsOfType('TeacherAssignedToCourse').where.key('courseId').equals(courseId)
-    .eventsOfType('TeacherRemovedFromCourse').where.key('courseId').equals(courseId);
+  return query([
+    { types: ['CourseCreated'], tags: [`course:${courseId}`] },
+    { types: ['CoursePublished'], tags: [`course:${courseId}`] },
+    { types: ['CourseClosed'], tags: [`course:${courseId}`] },
+    { types: ['CourseCancelled'], tags: [`course:${courseId}`] },
+    { types: ['TeacherAssignedToCourse'], tags: [`course:${courseId}`] },
+    { types: ['TeacherRemovedFromCourse'], tags: [`course:${courseId}`] },
+  ]);
 }
 
 function teacherStream(teacherId: string) {
-  return query
-    .eventsOfType('TeacherHired').where.key('teacherId').equals(teacherId)
-    .eventsOfType('TeacherDismissed').where.key('teacherId').equals(teacherId);
+  return query([
+    { types: ['TeacherHired'], tags: [`teacher:${teacherId}`] },
+    { types: ['TeacherDismissed'], tags: [`teacher:${teacherId}`] },
+  ]);
 }
 
 // Exported reducers (for unit tests)
@@ -39,7 +41,7 @@ export type CoursePublishState = {
 export function reduceCourseForPublish(events: StoredEvent[]): CoursePublishState {
   let state: CoursePublishState = { status: 'none' };
   for (const event of events) {
-    const p = event.payload;
+    const p = event.data;
     if (event.type === 'CourseCreated') {
       state = {
         status: 'draft',
@@ -107,7 +109,7 @@ export async function publishCourse(
 
   // Note: dropDeadline and withdrawalDeadline are intentionally absent from CoursePublishedPayload
   // They are set once in CourseCreated and must be read from the full course stream by downstream consumers.
-  const payload: CoursePublishedPayload = {
+  const data: CoursePublishedPayload = {
     courseId: input.courseId,
     teacherId: courseState.teacherId,
     maxStudents: courseState.maxStudents!,
@@ -117,7 +119,7 @@ export async function publishCourse(
   };
 
   await store.append(
-    [{ type: 'CoursePublished', payload: payload as unknown as Record<string, unknown> } as NewEvent],
-    { query: courseStream(input.courseId), expectedVersion: courseVersion },
+    [{ type: 'CoursePublished', data: data as unknown as Record<string, unknown>} as NewEvent],
+    { failIfEventsMatch: courseStream(input.courseId), after: courseVersion },
   );
 }

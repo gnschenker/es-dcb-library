@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test-library:
+    name: Library Tests
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+        cache: 'npm'
+    
+    - name: Install dependencies
+      run: npm ci
+    
+    - name: Type check
+      run: npm run typecheck
+    
+    - name: Run unit tests
+      run: npm run test:unit
+    
+    - name: Run integration tests
+      run: npm run test:integration
+    
+    - name: Build
+      run: npm run build
+
+  test-university-app:
+    name: University App Tests
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+        cache: 'npm'
+    
+    - name: Build library (required by university-app)
+      run: |
+        npm ci
+        npm run build
+    
+    - name: Install university-app dependencies (force fresh install of library)
+      run: cd university-app && rm -rf node_modules package-lock.json && npm install
+    
+    - name: Type check
+      run: cd university-app && npm run typecheck
+    
+    - name: Run unit tests
+      run: cd university-app && npm run test:unit
+    
+    - name: Run integration tests
+      run: cd university-app && npm run test:integration

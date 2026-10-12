@@ -21,13 +21,18 @@ export async function resetDatabase(pool: pg.Pool): Promise<void> {
 
 export async function seedEvents(
   pool: pg.Pool,
-  events: Array<{ type: string; payload: object; metadata?: object }>,
+  events: Array<{ type: string; data: object; metadata?: object; tags?: string[] }>,
 ): Promise<void> {
   for (const event of events) {
     await pool.query(
-      `INSERT INTO events (type, payload, metadata)
-       VALUES ($1, $2::jsonb, $3::jsonb)`,
-      [event.type, JSON.stringify(event.payload), event.metadata ? JSON.stringify(event.metadata) : null],
+      `INSERT INTO events (type, data, metadata, tags)
+       VALUES ($1, $2::jsonb, $3::jsonb, $4)`,
+      [
+        event.type,
+        JSON.stringify(event.data),
+        event.metadata ? JSON.stringify(event.metadata) : null,
+        event.tags ?? [],
+      ],
     );
   }
 }

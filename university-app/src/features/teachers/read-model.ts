@@ -1,13 +1,14 @@
 import { defineProjection, createEventDispatcher } from 'es-dcb-library/projections';
-import { query } from 'es-dcb-library';
+import { query, queryItem } from 'es-dcb-library';
 import type { TeacherHiredPayload, TeacherDismissedPayload } from '../../domain/events.js';
 
 export const teachersProjection = defineProjection({
   name: 'teachers-read-model',
 
-  query: query
-    .eventsOfType('TeacherHired')
-    .eventsOfType('TeacherDismissed'),
+  query: query([
+    { types: ['TeacherHired'] },
+    { types: ['TeacherDismissed'] },
+  ]),
 
   async setup(client) {
     await client.query(`

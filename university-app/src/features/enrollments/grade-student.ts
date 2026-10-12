@@ -1,5 +1,5 @@
 import type { EventStore, StoredEvent, NewEvent } from 'es-dcb-library';
-import { query } from 'es-dcb-library';
+import { query, queryItem } from 'es-dcb-library';
 import type { Clock } from '../../domain/clock.js';
 import {
   InvalidGradeError,
@@ -17,29 +17,32 @@ import type {
 
 // Private to this slice
 function enrollmentStream(studentId: string, courseId: string) {
-  return query
-    .eventsOfType('StudentEnrolled').where.key('studentId').equals(studentId).and.key('courseId').equals(courseId)
-    .eventsOfType('StudentDropped').where.key('studentId').equals(studentId).and.key('courseId').equals(courseId)
-    .eventsOfType('StudentWithdrew').where.key('studentId').equals(studentId).and.key('courseId').equals(courseId)
-    .eventsOfType('StudentGraded').where.key('studentId').equals(studentId).and.key('courseId').equals(courseId)
-    .eventsOfType('StudentPassedCourse').where.key('studentId').equals(studentId).and.key('courseId').equals(courseId)
-    .eventsOfType('StudentFailedCourse').where.key('studentId').equals(studentId).and.key('courseId').equals(courseId);
+  return query([
+    { types: ['StudentEnrolled'], tags: [`student:${studentId}`, `course:${courseId}`] },
+    { types: ['StudentDropped'], tags: [`student:${studentId}`, `course:${courseId}`] },
+    { types: ['StudentWithdrew'], tags: [`student:${studentId}`, `course:${courseId}`] },
+    { types: ['StudentGraded'], tags: [`student:${studentId}`, `course:${courseId}`] },
+    { types: ['StudentPassedCourse'], tags: [`student:${studentId}`, `course:${courseId}`] },
+    { types: ['StudentFailedCourse'], tags: [`student:${studentId}`, `course:${courseId}`] },
+  ]);
 }
 
 function courseStream(courseId: string) {
-  return query
-    .eventsOfType('CourseCreated').where.key('courseId').equals(courseId)
-    .eventsOfType('CoursePublished').where.key('courseId').equals(courseId)
-    .eventsOfType('CourseClosed').where.key('courseId').equals(courseId)
-    .eventsOfType('CourseCancelled').where.key('courseId').equals(courseId)
-    .eventsOfType('TeacherAssignedToCourse').where.key('courseId').equals(courseId)
-    .eventsOfType('TeacherRemovedFromCourse').where.key('courseId').equals(courseId);
+  return query([
+    { types: ['CourseCreated'], tags: [`course:${courseId}`] },
+    { types: ['CoursePublished'], tags: [`course:${courseId}`] },
+    { types: ['CourseClosed'], tags: [`course:${courseId}`] },
+    { types: ['CourseCancelled'], tags: [`course:${courseId}`] },
+    { types: ['TeacherAssignedToCourse'], tags: [`course:${courseId}`] },
+    { types: ['TeacherRemovedFromCourse'], tags: [`course:${courseId}`] },
+  ]);
 }
 
 function teacherStream(teacherId: string) {
-  return query
-    .eventsOfType('TeacherHired').where.key('teacherId').equals(teacherId)
-    .eventsOfType('TeacherDismissed').where.key('teacherId').equals(teacherId);
+  return query([
+    { types: ['TeacherHired'], tags: [`teacher:${teacherId}`] },
+    { types: ['TeacherDismissed'], tags: [`teacher:${teacherId}`] },
+  ]);
 }
 
 // Exported reducers (for unit tests)
@@ -71,7 +74,7 @@ export type CourseGradeState = {
 export function reduceCourseForGrade(events: StoredEvent[]): CourseGradeState {
   let state: CourseGradeState = { status: 'none' };
   for (const event of events) {
-    const p = event.payload;
+    const p = event.data;
     if (event.type === 'CourseCreated') {
       state = {
         status: 'draft',
@@ -184,12 +187,12 @@ export async function gradeStudent(
 
   await store.append(
     [
-      { type: 'StudentGraded', payload: gradedPayload as unknown as Record<string, unknown> } as NewEvent,
+      { type: 'StudentGraded', data: gradedPayload as unknown as Record<string, unknown>} as NewEvent,
       {
         type: passed ? 'StudentPassedCourse' : 'StudentFailedCourse',
-        payload: outcomePayload as unknown as Record<string, unknown>,
+        data: outcomePayload as unknown as Record<string, unknown>,
       } as NewEvent,
     ],
-    { query: enrollmentStream(input.studentId, input.courseId), expectedVersion: enrollmentVersion },
+    { failIfEventsMatch: enrollmentStream(input.studentId, input.courseId), after: enrollmentVersion },
   );
 }

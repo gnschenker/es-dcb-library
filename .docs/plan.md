@@ -1,7 +1,7 @@
-# Plan: es-dcb-library — Event Sourcing Library with Dynamic Context Boundaries
+# Plan: es-dcb-library — Event Sourcing Library with Dynamic Consistency Boundary
 
 ## Context
-Build a library for event sourcing using the DCB (Dynamic Context Boundaries) pattern. Instead of aggregates, context is defined dynamically by queries at runtime. The library provides a PostgreSQL-backed event store with a readable query builder DSL, transactional append with optimistic concurrency detection, and cursor-based streaming for large event sets. MVP excludes aggregates.
+Build a library for event sourcing using the DCB (Dynamic Consistency Boundary) pattern. Instead of aggregates, context is defined dynamically by queries at runtime. The library provides a PostgreSQL-backed event store with a readable query builder DSL, transactional append with optimistic concurrency detection, and cursor-based streaming for large event sets. MVP excludes aggregates.
 
 ---
 

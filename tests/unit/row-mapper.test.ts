@@ -6,9 +6,10 @@ const baseRow: EventRow = {
   global_position: '42',
   event_id: 'test-uuid-1234',
   type: 'OrderCreated',
-  payload: { orderId: 'o1', customerId: 'c1' },
+  data: { orderId: 'o1', customerId: 'c1' },
   metadata: { correlationId: 'corr-1' },
   occurred_at: new Date('2024-01-01T00:00:00.000Z'),
+  tags: ['order:o1', 'customer:c1'],
 };
 
 describe('mapRow', () => {
@@ -19,9 +20,10 @@ describe('mapRow', () => {
       expect(result).toHaveProperty('globalPosition');
       expect(result).toHaveProperty('eventId');
       expect(result).toHaveProperty('type');
-      expect(result).toHaveProperty('payload');
+      expect(result).toHaveProperty('data');
       expect(result).toHaveProperty('metadata');
       expect(result).toHaveProperty('occurredAt');
+      expect(result).toHaveProperty('tags');
     });
 
     it('maps global_position string "42" to BigInt 42n', () => {
@@ -91,23 +93,23 @@ describe('mapRow', () => {
     });
   });
 
-  describe('Payload handling', () => {
-    it('preserves empty payload as {}', () => {
-      const result = mapRow({ ...baseRow, payload: {} });
-      expect(result.payload).toEqual({});
+  describe('Data handling', () => {
+    it('preserves empty data as {}', () => {
+      const result = mapRow({ ...baseRow, data: {} });
+      expect(result.data).toEqual({});
     });
 
-    it('preserves deeply nested payload structure', () => {
-      const payload = { nested: { deep: true } };
-      const result = mapRow({ ...baseRow, payload });
-      expect(result.payload).toEqual({ nested: { deep: true } });
+    it('preserves deeply nested data structure', () => {
+      const data = { nested: { deep: true } };
+      const result = mapRow({ ...baseRow, data });
+      expect(result.data).toEqual({ nested: { deep: true } });
     });
 
-    it('preserves falsy number 0 in payload (not coerced to falsy)', () => {
-      const payload = { count: 0 };
-      const result = mapRow({ ...baseRow, payload });
-      expect(result.payload).toEqual({ count: 0 });
-      expect((result.payload as { count: number }).count).toBe(0);
+    it('preserves falsy number 0 in data (not coerced to falsy)', () => {
+      const data = { count: 0 };
+      const result = mapRow({ ...baseRow, data });
+      expect(result.data).toEqual({ count: 0 });
+      expect((result.data as { count: number }).count).toBe(0);
     });
   });
 
@@ -127,6 +129,23 @@ describe('mapRow', () => {
     it('occurredAt is an instance of Date', () => {
       const result = mapRow(baseRow);
       expect(result.occurredAt).toBeInstanceOf(Date);
+    });
+  });
+
+  describe('Tags handling', () => {
+    it('preserves tags array correctly', () => {
+      const result = mapRow({ ...baseRow, tags: ['tag1', 'tag2'] });
+      expect(result.tags).toEqual(['tag1', 'tag2']);
+    });
+
+    it('preserves empty tags array', () => {
+      const result = mapRow({ ...baseRow, tags: [] });
+      expect(result.tags).toEqual([]);
+    });
+
+    it('tags field is always an array (never null or undefined)', () => {
+      const result = mapRow(baseRow);
+      expect(Array.isArray(result.tags)).toBe(true);
     });
   });
 });

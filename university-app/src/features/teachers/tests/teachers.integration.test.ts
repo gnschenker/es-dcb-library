@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { query } from 'es-dcb-library';
+import { query, queryItem } from 'es-dcb-library';
 import { createTestStore, clearEvents } from '../../../../tests/integration/helpers.js';
 import { systemClock } from '../../../domain/clock.js';
 import { teacherIdFromEmail } from '../../../domain/ids.js';
@@ -34,13 +34,12 @@ describe('HireTeacher', () => {
     const { teacherId } = await hireTeacher(store, systemClock, TEACHER);
     expect(teacherId).toBe(teacherIdFromEmail(TEACHER.email));
 
-    const teacherStream = query
-      .eventsOfType('TeacherHired').where.key('teacherId').equals(teacherId);
+    const teacherStream = queryItem({ types: ['TeacherHired'], tags: [`teacher:${teacherId}`] });
     const { events } = await store.load(teacherStream);
     expect(events).toHaveLength(1);
     expect(events[0]?.type).toBe('TeacherHired');
-    expect(events[0]?.payload['name']).toBe('Dr. Smith');
-    expect(events[0]?.payload['department']).toBe('CS');
+    expect(events[0]?.data['name']).toBe('Dr. Smith');
+    expect(events[0]?.data['department']).toBe('CS');
     await store.close();
   });
 
@@ -70,14 +69,15 @@ describe('DismissTeacher', () => {
       const { teacherId } = await hireTeacher(store, systemClock, TEACHER);
       await dismissTeacher(store, systemClock, { teacherId, reason: 'budget cuts' });
 
-      const teacherStream = query
-        .eventsOfType('TeacherHired').where.key('teacherId').equals(teacherId)
-        .eventsOfType('TeacherDismissed').where.key('teacherId').equals(teacherId);
+      const teacherStream = query([
+        { types: ['TeacherHired'], tags: [`teacher:${teacherId}`] },
+        { types: ['TeacherDismissed'], tags: [`teacher:${teacherId}`] },
+      ]);
       const { events } = await store.load(teacherStream);
       const dismissed = events.find(e => e.type === 'TeacherDismissed');
       expect(dismissed).toBeDefined();
-      expect(dismissed?.payload['teacherId']).toBe(teacherId);
-      expect(dismissed?.payload['reason']).toBe('budget cuts');
+      expect(dismissed?.data['teacherId']).toBe(teacherId);
+      expect(dismissed?.data['reason']).toBe('budget cuts');
     } finally {
       await store.close();
     }
@@ -142,13 +142,11 @@ describe('DismissTeacher', () => {
     // Dismiss while course is still in draft — should auto-remove teacher from course
     await dismissTeacher(store, systemClock, { teacherId, reason: 'cuts' });
 
-    const courseStream = query
-      .eventsOfType('TeacherRemovedFromCourse').where.key('courseId').equals(courseId);
+    const courseStream = queryItem({ types: ['TeacherRemovedFromCourse'], tags: [`course:${courseId}`] });
     const { events: courseEvents } = await store.load(courseStream);
     expect(courseEvents.some(e => e.type === 'TeacherRemovedFromCourse')).toBe(true);
 
-    const teacherStream = query
-      .eventsOfType('TeacherDismissed').where.key('teacherId').equals(teacherId);
+    const teacherStream = queryItem({ types: ['TeacherDismissed'], tags: [`teacher:${teacherId}`] });
     const { events: teacherEvents } = await store.load(teacherStream);
     expect(teacherEvents.some(e => e.type === 'TeacherDismissed')).toBe(true);
     await store.close();

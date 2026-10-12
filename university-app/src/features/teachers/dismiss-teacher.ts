@@ -1,5 +1,5 @@
 import type { EventStore, StoredEvent, NewEvent } from 'es-dcb-library';
-import { query } from 'es-dcb-library';
+import { query, queryItem } from 'es-dcb-library';
 import type { Clock } from '../../domain/clock.js';
 import {
   TeacherNotFoundError,
@@ -13,19 +13,21 @@ import type {
 
 // Private to this slice
 function teacherStream(teacherId: string) {
-  return query
-    .eventsOfType('TeacherHired').where.key('teacherId').equals(teacherId)
-    .eventsOfType('TeacherDismissed').where.key('teacherId').equals(teacherId);
+  return query([
+    { types: ['TeacherHired'], tags: [`teacher:${teacherId}`] },
+    { types: ['TeacherDismissed'], tags: [`teacher:${teacherId}`] },
+  ]);
 }
 
 function courseStream(courseId: string) {
-  return query
-    .eventsOfType('CourseCreated').where.key('courseId').equals(courseId)
-    .eventsOfType('CoursePublished').where.key('courseId').equals(courseId)
-    .eventsOfType('CourseClosed').where.key('courseId').equals(courseId)
-    .eventsOfType('CourseCancelled').where.key('courseId').equals(courseId)
-    .eventsOfType('TeacherAssignedToCourse').where.key('courseId').equals(courseId)
-    .eventsOfType('TeacherRemovedFromCourse').where.key('courseId').equals(courseId);
+  return query([
+    { types: ['CourseCreated'], tags: [`course:${courseId}`] },
+    { types: ['CoursePublished'], tags: [`course:${courseId}`] },
+    { types: ['CourseClosed'], tags: [`course:${courseId}`] },
+    { types: ['CourseCancelled'], tags: [`course:${courseId}`] },
+    { types: ['TeacherAssignedToCourse'], tags: [`course:${courseId}`] },
+    { types: ['TeacherRemovedFromCourse'], tags: [`course:${courseId}`] },
+  ]);
 }
 
 // Exported reducers (for unit tests)
@@ -39,7 +41,7 @@ export type TeacherDismissState = {
 export function reduceTeacher(events: StoredEvent[]): TeacherDismissState {
   let state: TeacherDismissState = { status: 'none' };
   for (const event of events) {
-    const p = event.payload;
+    const p = event.data;
     if (event.type === 'TeacherHired') {
       state = {
         status: 'hired',
@@ -62,7 +64,7 @@ export type CourseStateForDismiss = {
 export function reduceCourseForDismiss(events: StoredEvent[]): CourseStateForDismiss {
   let state: CourseStateForDismiss = { status: 'none' };
   for (const event of events) {
-    const p = event.payload;
+    const p = event.data;
     if (event.type === 'CourseCreated') {
       state = { status: 'draft', teacherId: null };
     } else if (event.type === 'TeacherAssignedToCourse') {
@@ -104,9 +106,9 @@ export async function dismissTeacher(
   // A concurrent AssignTeacherToCourse between this scan and the final append could slip through.
   const assignedCourseIds = new Set<string>();
   for await (const event of store.stream(
-    query.eventsOfType('TeacherAssignedToCourse').where.key('teacherId').equals(input.teacherId),
+    queryItem({ types: ['TeacherAssignedToCourse'], tags: [`teacher:${input.teacherId}`] }),
   )) {
-    assignedCourseIds.add(event.payload['courseId'] as string);
+    assignedCourseIds.add(event.data['courseId'] as string);
   }
 
   const removedEvents: NewEvent[] = [];
@@ -128,7 +130,7 @@ export async function dismissTeacher(
         teacherId: input.teacherId,
         removedAt: clock.now().toISOString(),
       };
-      removedEvents.push({ type: 'TeacherRemovedFromCourse', payload: removedPayload as unknown as Record<string, unknown> } as NewEvent);
+      removedEvents.push({ type: 'TeacherRemovedFromCourse', data: removedPayload as unknown as Record<string, unknown>} as NewEvent);
     }
   }
 
@@ -139,7 +141,7 @@ export async function dismissTeacher(
   };
 
   await store.append(
-    [...removedEvents, { type: 'TeacherDismissed', payload: dismissedPayload as unknown as Record<string, unknown> } as NewEvent],
-    { query: teacherStream(input.teacherId), expectedVersion: version },
+    [...removedEvents, { type: 'TeacherDismissed', data: dismissedPayload as unknown as Record<string, unknown>} as NewEvent],
+    { failIfEventsMatch: teacherStream(input.teacherId), after: version },
   );
 }

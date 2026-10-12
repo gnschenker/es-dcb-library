@@ -2,10 +2,12 @@ import { afterAll } from 'vitest';
 import pg from 'pg';
 import { PostgresEventStore } from 'es-dcb-library';
 import type { EventStore } from 'es-dcb-library';
+import { tagExtractors } from '../../src/store.js';
 
 export function createTestStore(): EventStore {
   return new PostgresEventStore({
     pool: new pg.Pool({ connectionString: process.env['TEST_DATABASE_URL'] }),
+    tagExtractors,
   });
 }
 

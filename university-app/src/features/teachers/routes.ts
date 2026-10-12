@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import type { EventStore, StoredEvent } from 'es-dcb-library';
-import { query } from 'es-dcb-library';
+import { query, queryItem } from 'es-dcb-library';
 import type pg from 'pg';
 import type { Clock } from '../../domain/clock.js';
 import { hireTeacher } from './hire-teacher.js';
@@ -9,9 +9,10 @@ import { assignTeacher } from './assign-teacher.js';
 import { removeTeacher } from './remove-teacher.js';
 
 function teacherStream(teacherId: string) {
-  return query
-    .eventsOfType('TeacherHired').where.key('teacherId').equals(teacherId)
-    .eventsOfType('TeacherDismissed').where.key('teacherId').equals(teacherId);
+  return query([
+    { types: ['TeacherHired'], tags: [`teacher:${teacherId}`] },
+    { types: ['TeacherDismissed'], tags: [`teacher:${teacherId}`] },
+  ]);
 }
 
 function reduceTeacherForRead(events: StoredEvent[]) {
@@ -25,7 +26,7 @@ function reduceTeacherForRead(events: StoredEvent[]) {
     dismissedAt?: string;
   } = { status: 'none' };
   for (const event of events) {
-    const p = event.payload;
+    const p = event.data;
     if (event.type === 'TeacherHired') {
       state = {
         status: 'hired',

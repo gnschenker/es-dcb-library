@@ -1,5 +1,5 @@
 import type { EventStore, StoredEvent, NewEvent } from 'es-dcb-library';
-import { query } from 'es-dcb-library';
+import { query, queryItem } from 'es-dcb-library';
 import type { Clock } from '../../domain/clock.js';
 import { teacherIdFromEmail } from '../../domain/ids.js';
 import { TeacherAlreadyHiredError } from '../../domain/errors.js';
@@ -7,9 +7,10 @@ import type { TeacherHiredPayload } from '../../domain/events.js';
 
 // Private to this slice
 function teacherStream(teacherId: string) {
-  return query
-    .eventsOfType('TeacherHired').where.key('teacherId').equals(teacherId)
-    .eventsOfType('TeacherDismissed').where.key('teacherId').equals(teacherId);
+  return query([
+    { types: ['TeacherHired'], tags: [`teacher:${teacherId}`] },
+    { types: ['TeacherDismissed'], tags: [`teacher:${teacherId}`] },
+  ]);
 }
 
 // Exported reducer (for unit tests — not imported by other slices)
@@ -23,7 +24,7 @@ export type TeacherHireState = {
 export function reduceTeacher(events: StoredEvent[]): TeacherHireState {
   let state: TeacherHireState = { status: 'none' };
   for (const event of events) {
-    const p = event.payload;
+    const p = event.data;
     if (event.type === 'TeacherHired') {
       state = {
         status: 'hired',
@@ -59,7 +60,7 @@ export async function hireTeacher(
     );
   }
 
-  const payload: TeacherHiredPayload = {
+  const data: TeacherHiredPayload = {
     teacherId,
     name: input.name,
     email: input.email,
@@ -68,8 +69,8 @@ export async function hireTeacher(
   };
 
   await store.append(
-    [{ type: 'TeacherHired', payload: payload as unknown as Record<string, unknown> } as NewEvent],
-    { query: teacherStream(teacherId), expectedVersion: version },
+    [{ type: 'TeacherHired', data: data as unknown as Record<string, unknown>} as NewEvent],
+    { failIfEventsMatch: teacherStream(teacherId), after: version },
   );
 
   return { teacherId };

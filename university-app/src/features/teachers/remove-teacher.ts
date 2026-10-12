@@ -1,5 +1,5 @@
 import type { EventStore, StoredEvent, NewEvent } from 'es-dcb-library';
-import { query } from 'es-dcb-library';
+import { query, queryItem } from 'es-dcb-library';
 import type { Clock } from '../../domain/clock.js';
 import {
   CourseNotFoundError,
@@ -10,31 +10,35 @@ import type { TeacherRemovedFromCoursePayload } from '../../domain/events.js';
 
 // Private to this slice
 function courseStream(courseId: string) {
-  return query
-    .eventsOfType('CourseCreated').where.key('courseId').equals(courseId)
-    .eventsOfType('CoursePublished').where.key('courseId').equals(courseId)
-    .eventsOfType('CourseClosed').where.key('courseId').equals(courseId)
-    .eventsOfType('CourseCancelled').where.key('courseId').equals(courseId)
-    .eventsOfType('TeacherAssignedToCourse').where.key('courseId').equals(courseId)
-    .eventsOfType('TeacherRemovedFromCourse').where.key('courseId').equals(courseId);
+  return query([
+    { types: ['CourseCreated'], tags: [`course:${courseId}`] },
+    { types: ['CoursePublished'], tags: [`course:${courseId}`] },
+    { types: ['CourseClosed'], tags: [`course:${courseId}`] },
+    { types: ['CourseCancelled'], tags: [`course:${courseId}`] },
+    { types: ['TeacherAssignedToCourse'], tags: [`course:${courseId}`] },
+    { types: ['TeacherRemovedFromCourse'], tags: [`course:${courseId}`] },
+  ]);
 }
 
 function courseEnrollmentStream(courseId: string) {
-  return query
-    .eventsOfType('StudentEnrolled').where.key('courseId').equals(courseId)
-    .eventsOfType('StudentDropped').where.key('courseId').equals(courseId)
-    .eventsOfType('StudentWithdrew').where.key('courseId').equals(courseId);
+  return query([
+    { types: ['StudentEnrolled'], tags: [`course:${courseId}`] },
+    { types: ['StudentDropped'], tags: [`course:${courseId}`] },
+    { types: ['StudentWithdrew'], tags: [`course:${courseId}`] },
+  ]);
+
 }
 
 // Per-student enrollment stream — includes grading events, giving correct terminal status
 function enrollmentStream(studentId: string, courseId: string) {
-  return query
-    .eventsOfType('StudentEnrolled').where.key('studentId').equals(studentId).and.key('courseId').equals(courseId)
-    .eventsOfType('StudentDropped').where.key('studentId').equals(studentId).and.key('courseId').equals(courseId)
-    .eventsOfType('StudentWithdrew').where.key('studentId').equals(studentId).and.key('courseId').equals(courseId)
-    .eventsOfType('StudentGraded').where.key('studentId').equals(studentId).and.key('courseId').equals(courseId)
-    .eventsOfType('StudentPassedCourse').where.key('studentId').equals(studentId).and.key('courseId').equals(courseId)
-    .eventsOfType('StudentFailedCourse').where.key('studentId').equals(studentId).and.key('courseId').equals(courseId);
+  return query([
+    { types: ['StudentEnrolled'], tags: [`student:${studentId}`, `course:${courseId}`] },
+    { types: ['StudentDropped'], tags: [`student:${studentId}`, `course:${courseId}`] },
+    { types: ['StudentWithdrew'], tags: [`student:${studentId}`, `course:${courseId}`] },
+    { types: ['StudentGraded'], tags: [`student:${studentId}`, `course:${courseId}`] },
+    { types: ['StudentPassedCourse'], tags: [`student:${studentId}`, `course:${courseId}`] },
+    { types: ['StudentFailedCourse'], tags: [`student:${studentId}`, `course:${courseId}`] },
+  ]);
 }
 
 // Exported reducers (for unit tests)
@@ -46,7 +50,7 @@ export type CourseRemoveState = {
 export function reduceCourseForRemove(events: StoredEvent[]): CourseRemoveState {
   let state: CourseRemoveState = { status: 'none' };
   for (const event of events) {
-    const p = event.payload;
+    const p = event.data;
     if (event.type === 'CourseCreated') {
       state = { status: 'draft', teacherId: null };
     } else if (event.type === 'TeacherAssignedToCourse') {
@@ -110,7 +114,7 @@ export async function removeTeacher(
     const studentIds = new Set<string>();
     for (const event of enrollEvents) {
       if (event.type === 'StudentEnrolled') {
-        studentIds.add(event.payload['studentId'] as string);
+        studentIds.add(event.data['studentId'] as string);
       }
     }
     // Per-student load: courseEnrollmentStream lacks grading events, so a graded student
@@ -128,14 +132,14 @@ export async function removeTeacher(
     }
   }
 
-  const payload: TeacherRemovedFromCoursePayload = {
+  const data: TeacherRemovedFromCoursePayload = {
     courseId: input.courseId,
     teacherId: courseState.teacherId,
     removedAt: clock.now().toISOString(),
   };
 
   await store.append(
-    [{ type: 'TeacherRemovedFromCourse', payload: payload as unknown as Record<string, unknown> } as NewEvent],
-    { query: courseStream(input.courseId), expectedVersion: courseVersion },
+    [{ type: 'TeacherRemovedFromCourse', data: data as unknown as Record<string, unknown>} as NewEvent],
+    { failIfEventsMatch: courseStream(input.courseId), after: courseVersion },
   );
 }

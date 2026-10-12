@@ -4,9 +4,10 @@ export interface EventRow {
   global_position: string; // pg returns BIGSERIAL as string by default
   event_id: string;
   type: string;
-  payload: Record<string, unknown>;   // pg auto-parses JSONB
+  data: Record<string, unknown>;        // pg auto-parses JSONB
   metadata: Record<string, unknown> | null;
-  occurred_at: Date;                  // pg auto-parses TIMESTAMPTZ
+  occurred_at: Date;                    // pg auto-parses TIMESTAMPTZ
+  tags: string[];                       // pg auto-parses TEXT[] arrays
 }
 
 export function mapRow(row: EventRow): StoredEvent {
@@ -14,8 +15,9 @@ export function mapRow(row: EventRow): StoredEvent {
     globalPosition: BigInt(row.global_position),
     eventId: row.event_id,
     type: row.type,
-    payload: row.payload,
+    data: row.data,
     metadata: row.metadata,
     occurredAt: row.occurred_at,
+    tags: row.tags,
   };
 }

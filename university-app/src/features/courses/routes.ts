@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import type { EventStore, StoredEvent } from 'es-dcb-library';
-import { query } from 'es-dcb-library';
+import { query, queryItem } from 'es-dcb-library';
 import type { Clock } from '../../domain/clock.js';
 import { createCourse } from './create-course.js';
 import { publishCourse } from './publish-course.js';
@@ -8,13 +8,14 @@ import { closeCourse } from './close-course.js';
 import { cancelCourse } from './cancel-course.js';
 
 function courseStream(courseId: string) {
-  return query
-    .eventsOfType('CourseCreated').where.key('courseId').equals(courseId)
-    .eventsOfType('CoursePublished').where.key('courseId').equals(courseId)
-    .eventsOfType('CourseClosed').where.key('courseId').equals(courseId)
-    .eventsOfType('CourseCancelled').where.key('courseId').equals(courseId)
-    .eventsOfType('TeacherAssignedToCourse').where.key('courseId').equals(courseId)
-    .eventsOfType('TeacherRemovedFromCourse').where.key('courseId').equals(courseId);
+  return query([
+    { types: ['CourseCreated'], tags: [`course:${courseId}`] },
+    { types: ['CoursePublished'], tags: [`course:${courseId}`] },
+    { types: ['CourseClosed'], tags: [`course:${courseId}`] },
+    { types: ['CourseCancelled'], tags: [`course:${courseId}`] },
+    { types: ['TeacherAssignedToCourse'], tags: [`course:${courseId}`] },
+    { types: ['TeacherRemovedFromCourse'], tags: [`course:${courseId}`] },
+  ]);
 }
 
 function reduceCourseForRead(events: StoredEvent[]) {
@@ -32,7 +33,7 @@ function reduceCourseForRead(events: StoredEvent[]) {
     withdrawalDeadline?: string;
   } = { status: 'none' };
   for (const event of events) {
-    const p = event.payload;
+    const p = event.data;
     if (event.type === 'CourseCreated') {
       state = {
         status: 'draft',

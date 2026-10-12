@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { query } from 'es-dcb-library';
+import { query, queryItem } from 'es-dcb-library';
 import { createTestStore, clearEvents } from '../../../../tests/integration/helpers.js';
 import { systemClock } from '../../../domain/clock.js';
 import { hireTeacher } from '../../teachers/hire-teacher.js';
@@ -45,14 +45,13 @@ describe('CreateCourse', () => {
     const { courseId } = await createCourse(store, systemClock, BASE_COURSE);
     expect(courseId).toBeTypeOf('string');
 
-    const courseStream = query
-      .eventsOfType('CourseCreated').where.key('courseId').equals(courseId);
+    const courseStream = queryItem({ types: ['CourseCreated'], tags: [`course:${courseId}`] });
     const { events } = await store.load(courseStream);
     expect(events).toHaveLength(1);
-    expect(events[0]?.payload['title']).toBe('Intro CS');
-    expect(events[0]?.payload['creditHours']).toBe(3);
-    expect(events[0]?.payload['maxStudents']).toBe(30);
-    expect(events[0]?.payload['passingGrade']).toBe(60); // default
+    expect(events[0]?.data['title']).toBe('Intro CS');
+    expect(events[0]?.data['creditHours']).toBe(3);
+    expect(events[0]?.data['maxStudents']).toBe(30);
+    expect(events[0]?.data['passingGrade']).toBe(60); // default
     await store.close();
   });
 
@@ -109,10 +108,9 @@ describe('AssignTeacherToCourse', () => {
     const { courseId } = await createCourse(store, systemClock, BASE_COURSE);
     await assignTeacher(store, systemClock, { courseId, teacherId });
 
-    const s = query
-      .eventsOfType('TeacherAssignedToCourse').where.key('courseId').equals(courseId);
+    const s = queryItem({ types: ['TeacherAssignedToCourse'], tags: [`course:${courseId}`] });
     const { events } = await store.load(s);
-    expect(events[0]?.payload['teacherId']).toBe(teacherId);
+    expect(events[0]?.data['teacherId']).toBe(teacherId);
     await store.close();
   });
 });
@@ -125,11 +123,10 @@ describe('PublishCourse', () => {
     await assignTeacher(store, systemClock, { courseId, teacherId });
     await publishCourse(store, systemClock, { courseId });
 
-    const s = query
-      .eventsOfType('CoursePublished').where.key('courseId').equals(courseId);
+    const s = queryItem({ types: ['CoursePublished'], tags: [`course:${courseId}`] });
     const { events } = await store.load(s);
     expect(events).toHaveLength(1);
-    expect(events[0]?.payload['teacherId']).toBe(teacherId);
+    expect(events[0]?.data['teacherId']).toBe(teacherId);
     await store.close();
   });
 
@@ -150,7 +147,7 @@ describe('CloseCourse', () => {
     const { courseId } = await setupPublishedCourse(store);
     await closeCourse(store, systemClock, { courseId });
 
-    const s = query.eventsOfType('CourseClosed').where.key('courseId').equals(courseId);
+    const s = queryItem({ types: ['CourseClosed'], tags: [`course:${courseId}`] });
     const { events } = await store.load(s);
     expect(events).toHaveLength(1);
     await store.close();
@@ -173,10 +170,10 @@ describe('CancelCourse', () => {
     const { courseId } = await createCourse(store, systemClock, BASE_COURSE);
     await cancelCourse(store, systemClock, { courseId, reason: 'low enrollment' });
 
-    const s = query.eventsOfType('CourseCancelled').where.key('courseId').equals(courseId);
+    const s = queryItem({ types: ['CourseCancelled'], tags: [`course:${courseId}`] });
     const { events } = await store.load(s);
     expect(events).toHaveLength(1);
-    expect(events[0]?.payload['reason']).toBe('low enrollment');
+    expect(events[0]?.data['reason']).toBe('low enrollment');
     await store.close();
   });
 
@@ -206,13 +203,11 @@ describe('CancelCourse', () => {
 
     await cancelCourse(store, systemClock, { courseId, reason: 'cancelled' });
 
-    const droppedStream = query
-      .eventsOfType('StudentDropped').where.key('courseId').equals(courseId);
+    const droppedStream = queryItem({ types: ['StudentDropped'], tags: [`course:${courseId}`] });
     const { events: droppedEvents } = await store.load(droppedStream);
     expect(droppedEvents).toHaveLength(1); // exactly one student was enrolled
 
-    const cancelledStream = query
-      .eventsOfType('CourseCancelled').where.key('courseId').equals(courseId);
+    const cancelledStream = queryItem({ types: ['CourseCancelled'], tags: [`course:${courseId}`] });
     const { events: cancelledEvents } = await store.load(cancelledStream);
     expect(cancelledEvents).toHaveLength(1);
     await store.close();

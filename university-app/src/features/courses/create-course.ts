@@ -1,5 +1,5 @@
 import type { EventStore, StoredEvent, NewEvent } from 'es-dcb-library';
-import { query } from 'es-dcb-library';
+import { query, queryItem } from 'es-dcb-library';
 import type { Clock } from '../../domain/clock.js';
 import { newCourseId } from '../../domain/ids.js';
 import {
@@ -12,13 +12,14 @@ import type { CourseCreatedPayload } from '../../domain/events.js';
 
 // Private to this slice
 function courseStream(courseId: string) {
-  return query
-    .eventsOfType('CourseCreated').where.key('courseId').equals(courseId)
-    .eventsOfType('CoursePublished').where.key('courseId').equals(courseId)
-    .eventsOfType('CourseClosed').where.key('courseId').equals(courseId)
-    .eventsOfType('CourseCancelled').where.key('courseId').equals(courseId)
-    .eventsOfType('TeacherAssignedToCourse').where.key('courseId').equals(courseId)
-    .eventsOfType('TeacherRemovedFromCourse').where.key('courseId').equals(courseId);
+  return query([
+    { types: ['CourseCreated'], tags: [`course:${courseId}`] },
+    { types: ['CoursePublished'], tags: [`course:${courseId}`] },
+    { types: ['CourseClosed'], tags: [`course:${courseId}`] },
+    { types: ['CourseCancelled'], tags: [`course:${courseId}`] },
+    { types: ['TeacherAssignedToCourse'], tags: [`course:${courseId}`] },
+    { types: ['TeacherRemovedFromCourse'], tags: [`course:${courseId}`] },
+  ]);
 }
 
 export interface CreateCourseInput {
@@ -64,7 +65,7 @@ export async function createCourse(
   }
 
   const courseId = newCourseId();
-  const payload: CourseCreatedPayload = {
+  const data: CourseCreatedPayload = {
     courseId,
     title: input.title,
     semester: input.semester,
@@ -77,8 +78,8 @@ export async function createCourse(
   };
 
   await store.append(
-    [{ type: 'CourseCreated', payload: payload as unknown as Record<string, unknown> } as NewEvent],
-    { query: courseStream(courseId), expectedVersion: 0n },
+    [{ type: 'CourseCreated', data: data as unknown as Record<string, unknown>} as NewEvent],
+    { failIfEventsMatch: courseStream(courseId), after: 0n },
   );
 
   return { courseId };

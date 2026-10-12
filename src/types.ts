@@ -1,18 +1,20 @@
-import type { QueryDefinition } from './query/types.js';
+import type { Query } from './query/types.js';
 
-export interface NewEvent<P = Record<string, unknown>> {
+export interface NewEvent<D = Record<string, unknown>> {
   type: string;
-  payload: P;
+  data: D;
   metadata?: Record<string, unknown>;
+  tags?: string[];
 }
 
-export interface StoredEvent<P = Record<string, unknown>> {
+export interface StoredEvent<D = Record<string, unknown>> {
   globalPosition: bigint;
   eventId: string;
   type: string;
-  payload: P;
+  data: D;
   metadata: Record<string, unknown> | null;
   occurredAt: Date;
+  tags: string[];
 }
 
 export interface LoadResult {
@@ -20,10 +22,9 @@ export interface LoadResult {
   version: bigint;
 }
 
-export interface AppendOptions {
-  query: QueryDefinition;
-  expectedVersion: bigint;
-  concurrencyQuery?: QueryDefinition;
+export interface AppendCondition {
+  failIfEventsMatch: Query;
+  after?: bigint;
 }
 
 export interface StreamOptions {
@@ -31,10 +32,12 @@ export interface StreamOptions {
   afterPosition?: bigint;
 }
 
+export type TagExtractor = (event: NewEvent) => string[];
+
 export interface EventStore {
-  load(query: QueryDefinition): Promise<LoadResult>;
-  append(events: NewEvent | NewEvent[], options?: AppendOptions): Promise<StoredEvent[]>;
-  stream(query: QueryDefinition, options?: StreamOptions): AsyncIterable<StoredEvent>;
+  load(query: Query): Promise<LoadResult>;
+  append(events: NewEvent | NewEvent[], condition?: AppendCondition): Promise<StoredEvent[]>;
+  stream(query: Query, options?: StreamOptions): AsyncIterable<StoredEvent>;
   initializeSchema(): Promise<void>;
   close(): Promise<void>;
 }

@@ -38,7 +38,7 @@ The integration test suite starts a PostgreSQL 15 Docker container automatically
 
 ## Architecture
 
-This is a TypeScript event sourcing library implementing the **DCB (Dynamic Context Boundaries)** pattern. There are no aggregates — context is defined dynamically at runtime by query objects.
+This is a TypeScript event sourcing library implementing the **DCB (Dynamic Consistency Boundary)** pattern. There are no aggregates — context is defined dynamically at runtime by query objects.
 
 ### Layer overview
 

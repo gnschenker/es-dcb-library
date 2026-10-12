@@ -35,14 +35,15 @@ import {
 import { systemClock } from '../../../domain/clock.js';
 
 let pos = 1n;
-function makeEvent(type: string, payload: Record<string, unknown>): StoredEvent {
+function makeEvent(type: string, data: Record<string, unknown>): StoredEvent {
   return {
     globalPosition: pos++,
     eventId: `evt-${String(pos)}`,
     type,
-    payload,
+    data,
     metadata: null,
     occurredAt: new Date(),
+    tags: [],
   };
 }
 

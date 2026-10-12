@@ -1,4 +1,4 @@
-import type { QueryDefinition, FilterNode, Clause } from './types.js';
+import type { Query, QueryItem } from './types.js';
 
 export interface CompiledQuery {
   sql: string;
@@ -6,79 +6,76 @@ export interface CompiledQuery {
 }
 
 /**
- * Compiles a FilterNode into a SQL fragment and appends parameters.
- * Uses a shared counter object so recursive calls share the same sequence.
+ * Compiles a single QueryItem into a SQL WHERE fragment.
+ * 
+ * Match logic:
+ * - types: event.type = ANY($n) OR $n = '{}' (empty array means any type)
+ * - tags: event.tags @> $m (event has all required tags)
  */
-function compileFilterNode(
-  node: FilterNode,
+function compileItem(
+  item: QueryItem,
   params: unknown[],
   counter: { n: number },
 ): string {
-  if (node.kind === 'attr') {
-    params.push(JSON.stringify({ [node.key]: node.value }));
+  const conditions: string[] = [];
+  
+  // Type condition
+  const types = item.types ?? [];
+  if (types.length > 0) {
+    params.push(types);
     counter.n += 1;
-    return `payload @> $${counter.n}::jsonb`;
+    conditions.push(`type = ANY($${counter.n})`);
   }
-
-  if (node.kind === 'and') {
-    const parts = node.filters.map((f) => compileFilterNode(f, params, counter));
-    return `(${parts.join(' AND ')})`;
+  // If types is empty or undefined, no type constraint (matches any type)
+  
+  // Tags condition
+  const tags = item.tags ?? [];
+  if (tags.length > 0) {
+    params.push(tags);
+    counter.n += 1;
+    conditions.push(`tags @> $${counter.n}`);
   }
-
-  // node.kind === 'or'
-  const parts = node.filters.map((f) => compileFilterNode(f, params, counter));
-  return `(${parts.join(' OR ')})`;
+  
+  if (conditions.length === 0) {
+    // No constraints - matches all events
+    return 'TRUE';
+  }
+  
+  return conditions.length === 1 ? conditions[0]! : `(${conditions.join(' AND ')})`;
 }
 
 /**
- * Compiles a single Clause into a SQL fragment and appends parameters.
- */
-function compileClause(
-  clause: Clause,
-  params: unknown[],
-  counter: { n: number },
-): string {
-  params.push(clause.type);
-  counter.n += 1;
-  const typeRef = `$${counter.n}`;
-
-  if (clause.filter === null) {
-    return `type = ${typeRef}`;
-  }
-
-  const filterSQL = compileFilterNode(clause.filter, params, counter);
-  return `(type = ${typeRef} AND ${filterSQL})`;
-}
-
-/**
- * Compiles all clauses of a QueryDefinition into a WHERE clause SQL fragment.
+ * Compiles a Query into a WHERE clause.
+ * Items are OR'ed together.
  */
 function compileWhereClause(
-  query: QueryDefinition,
+  query: Query,
   params: unknown[],
   counter: { n: number },
 ): string {
-  const clauses = query._clauses;
-
-  if (clauses.length === 1) {
-    const clauseSQL = compileClause(clauses[0] as Clause, params, counter);
-    return `WHERE ${clauseSQL}`;
+  if (query.items.length === 0) {
+    throw new Error('Query must have at least one item');
   }
-
-  const parts = clauses.map((clause) => compileClause(clause, params, counter));
-  return `WHERE (${parts.join(' OR ')})`;
+  
+  const conditions = query.items.map(item => compileItem(item, params, counter));
+  
+  if (conditions.length === 1) {
+    return `WHERE ${conditions[0]}`;
+  }
+  
+  return `WHERE (${conditions.join(' OR ')})`;
 }
 
 /**
- * Compiles a QueryDefinition into a full SELECT query ordered by global_position ASC.
+ * Compiles a Query into a full SELECT query ordered by global_position ASC.
  */
-export function compileLoadQuery(query: QueryDefinition): CompiledQuery {
+export function compileLoadQuery(query: Query): CompiledQuery {
   const params: unknown[] = [];
   const counter = { n: 0 };
   const whereClause = compileWhereClause(query, params, counter);
 
   const sql = [
-    'SELECT global_position, event_id, type, payload, metadata, occurred_at',
+    'SELECT global_position, event_id, type, data, metadata, occurred_at, tags',
     'FROM events',
     whereClause,
     'ORDER BY global_position ASC',
@@ -88,10 +85,9 @@ export function compileLoadQuery(query: QueryDefinition): CompiledQuery {
 }
 
 /**
- * Compiles a QueryDefinition into a SELECT COALESCE(MAX(global_position), 0) query.
- * Used for version/concurrency checks. No ORDER BY.
+ * Compiles a Query into a version check query: SELECT COALESCE(MAX(global_position), 0).
  */
-export function compileVersionCheckQuery(query: QueryDefinition): CompiledQuery {
+export function compileVersionCheckQuery(query: Query): CompiledQuery {
   const params: unknown[] = [];
   const counter = { n: 0 };
   const whereClause = compileWhereClause(query, params, counter);
@@ -106,21 +102,15 @@ export function compileVersionCheckQuery(query: QueryDefinition): CompiledQuery 
 }
 
 /**
- * Compiles a QueryDefinition into a keyset-paginated SELECT query.
- * Appends AND global_position > $N LIMIT $M to the WHERE clause.
- *
- * @param paramOffset - number of parameters that precede this query in the caller's param list.
- *   When 0 (default), params are numbered $1, $2, etc.
- *   When 2, params start at $3, $4, etc. (for embedding in a larger query).
+ * Compiles a Query into a keyset-paginated SELECT query.
  */
 export function compileStreamQuery(
-  query: QueryDefinition,
+  query: Query,
   afterPosition: bigint,
   batchSize: number,
-  paramOffset: number = 0,
 ): CompiledQuery {
   const params: unknown[] = [];
-  const counter = { n: paramOffset };
+  const counter = { n: 0 };
   const whereClause = compileWhereClause(query, params, counter);
 
   params.push(afterPosition);
@@ -132,7 +122,7 @@ export function compileStreamQuery(
   const limitRef = `$${counter.n}`;
 
   const sql = [
-    'SELECT global_position, event_id, type, payload, metadata, occurred_at',
+    'SELECT global_position, event_id, type, data, metadata, occurred_at, tags',
     'FROM events',
     `${whereClause} AND global_position > ${positionRef}`,
     'ORDER BY global_position ASC',
@@ -143,23 +133,69 @@ export function compileStreamQuery(
 }
 
 /**
- * Produces a stable canonical string representation of a QueryDefinition.
- * Clauses are sorted alphabetically by type. Used for advisory lock key derivation.
+ * Compiles a Query into an existence check:
+ * SELECT EXISTS (SELECT 1 FROM events WHERE <query> AND global_position > $after LIMIT 1)
+ * 
+ * Used for append condition: fails if any matching event exists after the specified position.
  */
-export function compileCanonicalKey(query: QueryDefinition): string {
-  function canonicalFilter(node: FilterNode | null): unknown {
-    if (node === null) return null;
-    if (node.kind === 'attr') {
-      return { kind: 'attr', key: node.key, value: node.value };
-    }
-    return { kind: node.kind, filters: node.filters.map(canonicalFilter) };
+export function compileExistsQuery(query: Query, after?: bigint): CompiledQuery {
+  const params: unknown[] = [];
+  const counter = { n: 0 };
+  const whereClause = compileWhereClause(query, params, counter);
+  
+  let positionClause = '';
+  if (after !== undefined) {
+    params.push(after);
+    counter.n += 1;
+    positionClause = ` AND global_position > $${counter.n}`;
   }
+  
+  const sql = [
+    'SELECT EXISTS (',
+    '  SELECT 1',
+    '  FROM events',
+    `  ${whereClause}${positionClause}`,
+    '  LIMIT 1',
+    ') AS exists',
+  ].join('\n');
+  
+  return { sql, params };
+}
 
-  const sorted = [...query._clauses].sort((a, b) => a.type.localeCompare(b.type));
-  const canonical = sorted.map((clause) => ({
-    type: clause.type,
-    filter: canonicalFilter(clause.filter),
-  }));
-
-  return JSON.stringify(canonical);
+/**
+ * Extracts all (type, tag) pairs from a Query for locking.
+ * Returns pairs in sorted order to prevent deadlocks.
+ * 
+ * For items with empty types (any type), uses '*' as the type.
+ * For items with empty tags, uses '' as the tag.
+ */
+export function extractLockPairs(query: Query): Array<{ type: string; tag: string }> {
+  const pairs = new Set<string>();
+  
+  for (const item of query.items) {
+    const types = item.types ?? [];
+    const tags = item.tags ?? [];
+    
+    // If no types specified, lock on '*' (any type)
+    const typesToLock = types.length > 0 ? types : ['*'];
+    
+    // If no tags specified, lock on '' (empty tag)
+    const tagsToLock = tags.length > 0 ? tags : [''];
+    
+    // Cartesian product of types and tags
+    for (const type of typesToLock) {
+      for (const tag of tagsToLock) {
+        pairs.add(JSON.stringify({ type, tag }));
+      }
+    }
+  }
+  
+  // Parse back and sort
+  const result = Array.from(pairs).map(s => JSON.parse(s) as { type: string; tag: string });
+  result.sort((a, b) => {
+    const typeCmp = a.type.localeCompare(b.type);
+    return typeCmp !== 0 ? typeCmp : a.tag.localeCompare(b.tag);
+  });
+  
+  return result;
 }

@@ -1,7 +1,7 @@
 {
   "name": "es-dcb-library",
   "version": "0.1.0",
-  "description": "Event sourcing library with Dynamic Context Boundaries (DCB) pattern",
+  "description": "Event sourcing library with Dynamic Consistency Boundary (DCB) pattern",
   "type": "module",
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",

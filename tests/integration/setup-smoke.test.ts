@@ -35,8 +35,8 @@ describe('integration test infrastructure', () => {
   it('seedEvents inserts rows readable via raw query', async () => {
     await resetDatabase(pool);
     await seedEvents(pool, [
-      { type: 'TestEvent', payload: { value: 42 } },
-      { type: 'TestEvent', payload: { value: 99 }, metadata: { source: 'test' } },
+      { type: 'TestEvent', data: { value: 42 } },
+      { type: 'TestEvent', data: { value: 99 }, metadata: { source: 'test' } },
     ]);
     const result = await pool.query('SELECT COUNT(*)::int AS count FROM events');
     expect(result.rows[0]).toEqual({ count: 2 });
@@ -44,7 +44,7 @@ describe('integration test infrastructure', () => {
 
   it('resetDatabase after seedEvents clears the table', async () => {
     await resetDatabase(pool);
-    await seedEvents(pool, [{ type: 'TestEvent', payload: { x: 1 } }]);
+    await seedEvents(pool, [{ type: 'TestEvent', data: { x: 1 } }]);
     await resetDatabase(pool);
     const result = await pool.query('SELECT COUNT(*)::int AS count FROM events');
     expect(result.rows[0]).toEqual({ count: 0 });
