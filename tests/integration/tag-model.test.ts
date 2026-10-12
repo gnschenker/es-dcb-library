@@ -198,40 +198,32 @@ describe('PostgresEventStore - Tag Model (Integration)', () => {
   });
 
   describe('Overlapping queries with tag-based locking', () => {
-    it('serializes two overlapping queries correctly with retry', async () => {
-      // This tests the fix for the overlapping-query hole
+    it('serializes concurrent writes with blocking locks (only real conflicts fail)', async () => {
+      // With blocking locks, concurrent writers wait for each other
+      // Only one that detects a real conflict (stale version) gets ConcurrencyError
       const results: string[] = [];
 
       const writer = async (id: string) => {
-        let retries = 0;
-        const maxRetries = 5;
+        const q = queryItem({ tags: ['order:o1'] });
+        const { version } = await store.load(q);
         
-        while (retries < maxRetries) {
-          try {
-            const q = queryItem({ tags: ['order:o1'] });
-            const { version } = await store.load(q);
-            
-            // Simulate some work
-            await new Promise(resolve => setTimeout(resolve, 10));
-            
-            await store.append(
-              { type: `Writer${id}`, data: {}, tags: ['order:o1', `writer:${id}`] },
-              { failIfEventsMatch: q, after: version }
-            );
-            
-            results.push(`writer${id}`);
-            return; // Success
-          } catch (err) {
-            if (err instanceof Error && err.message.includes('Append condition failed')) {
-              retries++;
-              if (retries >= maxRetries) {
-                throw err;
-              }
-              // Retry with exponential backoff
-              await new Promise(resolve => setTimeout(resolve, 50 * retries));
-            } else {
-              throw err;
-            }
+        // Simulate some work
+        await new Promise(resolve => setTimeout(resolve, 10));
+        
+        // Both writers start with version 0. Due to blocking locks:
+        // - First writer acquires lock, checks condition (passes), inserts, commits, releases lock
+        // - Second writer waits for lock, acquires it, checks condition (fails - sees first writer's event), throws
+        try {
+          await store.append(
+            { type: `Writer${id}`, data: {}, tags: ['order:o1', `writer:${id}`] },
+            { failIfEventsMatch: q, after: version }
+          );
+          results.push(`success:${id}`);
+        } catch (err) {
+          if (err instanceof Error && err.message.includes('Append condition failed')) {
+            results.push(`conflict:${id}`);
+          } else {
+            throw err;
           }
         }
       };
@@ -239,12 +231,14 @@ describe('PostgresEventStore - Tag Model (Integration)', () => {
       // Both try to append concurrently
       await Promise.all([writer('1'), writer('2')]);
 
-      // Both should eventually succeed (one immediately, one after retry)
+      // One succeeds, one gets real conflict
       expect(results).toHaveLength(2);
+      expect(results.filter(r => r.startsWith('success'))).toHaveLength(1);
+      expect(results.filter(r => r.startsWith('conflict'))).toHaveLength(1);
 
-      // Verify both events are in the store
+      // Verify only one event is in the store
       const finalEvents = await store.load(queryItem({ tags: ['order:o1'] }));
-      expect(finalEvents.events).toHaveLength(2);
+      expect(finalEvents.events).toHaveLength(1);
     });
 
     it('prevents conflicting appends to overlapping queries', async () => {
@@ -271,6 +265,69 @@ describe('PostgresEventStore - Tag Model (Integration)', () => {
           { failIfEventsMatch: queryItem({ tags: ['order:o1'] }), after: version }
         )
       ).rejects.toThrow('Append condition failed');
+    });
+
+    it('two different but overlapping queries race - only one succeeds', async () => {
+      // This is the critical test: two queries that overlap but are different
+      // In the old system, they'd get different locks and both could append (bug!)
+      // With tag-based locking, they share locks and serialize correctly
+
+      const results: string[] = [];
+
+      // Query 1: All events for order:o1
+      const writer1 = async () => {
+        const q = queryItem({ tags: ['order:o1'] });
+        const { version } = await store.load(q);
+        await new Promise(resolve => setTimeout(resolve, 10));
+        
+        try {
+          await store.append(
+            { type: 'OrderEvent', data: {}, tags: ['order:o1', 'from:writer1'] },
+            { failIfEventsMatch: q, after: version }
+          );
+          results.push('writer1:success');
+        } catch (err) {
+          if (err instanceof Error && err.message.includes('Append condition failed')) {
+            results.push('writer1:conflict');
+          } else {
+            throw err;
+          }
+        }
+      };
+
+      // Query 2: Different query but overlaps (any event with customer:c1 and order:o1)
+      const writer2 = async () => {
+        const q = queryItem({ tags: ['order:o1', 'customer:c1'] });
+        const { version } = await store.load(q);
+        await new Promise(resolve => setTimeout(resolve, 10));
+        
+        try {
+          await store.append(
+            { type: 'CustomerOrderEvent', data: {}, tags: ['order:o1', 'customer:c1', 'from:writer2'] },
+            { failIfEventsMatch: q, after: version }
+          );
+          results.push('writer2:success');
+        } catch (err) {
+          if (err instanceof Error && err.message.includes('Append condition failed')) {
+            results.push('writer2:conflict');
+          } else {
+            throw err;
+          }
+        }
+      };
+
+      // Race them
+      await Promise.all([writer1(), writer2()]);
+
+      // Both queries share the lock on (type:*, tag:order:o1)
+      // One succeeds, one sees the other's event and gets conflict
+      expect(results).toHaveLength(2);
+      expect(results.filter(r => r.includes('success'))).toHaveLength(1);
+      expect(results.filter(r => r.includes('conflict'))).toHaveLength(1);
+
+      // Only one event appended
+      const allEvents = await store.load(queryItem({ tags: ['order:o1'] }));
+      expect(allEvents.events).toHaveLength(1);
     });
   });
 });

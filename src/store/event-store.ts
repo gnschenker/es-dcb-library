@@ -61,43 +61,17 @@ export class PostgresEventStore implements EventStore {
         await client.query("SET LOCAL statement_timeout = '30s'");
 
         // Acquire advisory locks for all (type, tag) pairs in sorted order
+        // Using blocking pg_advisory_xact_lock - will wait for locks held by other transactions
         const lockPairs = extractLockPairs(condition.failIfEventsMatch);
         for (const { type, tag } of lockPairs) {
           const lockKey = `${type}:${tag}`;
           
-          // Try to acquire lock with retry (exponential backoff)
-          let acquired = false;
-          const maxRetries = 3;
-          const delays = [50, 200, 800]; // milliseconds
-          
-          for (let attempt = 0; attempt <= maxRetries; attempt++) {
-            const lockResult = await client.query<{ acquired: boolean }>(
-              'SELECT pg_try_advisory_xact_lock(hashtext($1)) AS acquired',
-              [lockKey]
-            );
-            acquired = lockResult.rows[0]!.acquired;
-            
-            if (acquired) {
-              break;
-            }
-            
-            // If not acquired and we have retries left, wait and try again
-            if (attempt < maxRetries) {
-              await new Promise(resolve => setTimeout(resolve, delays[attempt]));
-            }
-          }
-          
-          if (!acquired) {
-            await client.query('ROLLBACK');
-            throw new ConcurrencyError(
-              condition.after ?? 0n,
-              condition.after ?? 0n,
-              `Advisory lock could not be acquired for ${lockKey} after ${maxRetries} retries`
-            );
-          }
+          // Blocking lock - waits until acquired or lock_timeout expires
+          await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [lockKey]);
         }
 
-        // Check append condition: fail if any matching event exists after the specified position
+        // All locks acquired - now check append condition
+        // If condition fails here, it's a real conflict (not lock contention)
         const { sql: existsSql, params: existsParams } = compileExistsQuery(
           condition.failIfEventsMatch,
           condition.after
@@ -106,7 +80,7 @@ export class PostgresEventStore implements EventStore {
         
         if (existsResult.rows[0]!.exists) {
           await client.query('ROLLBACK');
-          const actualVersion = condition.after ?? 0n; // We don't know the exact version, but we know it's > after
+          const actualVersion = condition.after ?? 0n;
           throw new ConcurrencyError(
             condition.after ?? 0n,
             actualVersion,
