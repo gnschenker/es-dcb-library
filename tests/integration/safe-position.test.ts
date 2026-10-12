@@ -3,6 +3,7 @@ import pg from 'pg';
 import { PostgresEventStore } from '../../src/index.js';
 import { createTestPool, resetDatabase } from './helpers.js';
 import { queryAll } from '../../src/index.js';
+import { computeSafePosition } from '../../src/store/safe-position.js';
 
 let pool: pg.Pool;
 let store: PostgresEventStore;
@@ -18,6 +19,75 @@ afterAll(async () => {
 });
 
 describe('PostgresEventStore - Out-of-Order Commit Safety (Integration)', () => {
+  it('does not treat higher position as safe when lower position is still in-flight (nextval before insert)', async () => {
+    // T reserves p, S reserves q>p, S inserts+commits first while T still holds p uncommitted.
+    // xmax/xmin on committed q alone must not make q safe while p is open.
+    const t = await pool.connect();
+    const s = await pool.connect();
+
+    try {
+      await t.query('BEGIN');
+      await s.query('BEGIN');
+
+      const pRes = await t.query<{ p: string }>(
+        `SELECT nextval(pg_get_serial_sequence('events', 'global_position'))::text AS p`,
+      );
+      const qRes = await s.query<{ q: string }>(
+        `SELECT nextval(pg_get_serial_sequence('events', 'global_position'))::text AS q`,
+      );
+      const p = BigInt(pRes.rows[0]!.p);
+      const q = BigInt(qRes.rows[0]!.q);
+      expect(q).toBe(p + 1n);
+
+      await s.query(
+        `INSERT INTO events (global_position, type, data, metadata, tags)
+         OVERRIDING SYSTEM VALUE
+         VALUES ($1, $2, $3::jsonb, $4::jsonb, $5)`,
+        [q.toString(), 'EventQ', { value: 'Q' }, null, ['tag:q']],
+      );
+      await t.query(
+        `INSERT INTO events (global_position, type, data, metadata, tags)
+         OVERRIDING SYSTEM VALUE
+         VALUES ($1, $2, $3::jsonb, $4::jsonb, $5)`,
+        [p.toString(), 'EventP', { value: 'P' }, null, ['tag:p']],
+      );
+
+      await s.query('COMMIT');
+
+      const horizonClient = await pool.connect();
+      try {
+        const safeWhileTOpen = await computeSafePosition(horizonClient);
+        expect(safeWhileTOpen).toBe(p - 1n);
+
+        const safeStream: unknown[] = [];
+        for await (const event of store.stream(queryAll(), { useSafePosition: true })) {
+          safeStream.push(event);
+        }
+        expect(safeStream).toHaveLength(0);
+      } finally {
+        horizonClient.release();
+      }
+
+      await t.query('COMMIT');
+
+      const afterClient = await pool.connect();
+      try {
+        expect(await computeSafePosition(afterClient)).toBe(q);
+      } finally {
+        afterClient.release();
+      }
+
+      const allEvents: unknown[] = [];
+      for await (const event of store.stream(queryAll(), { useSafePosition: true })) {
+        allEvents.push(event);
+      }
+      expect(allEvents).toHaveLength(2);
+    } finally {
+      t.release();
+      s.release();
+    }
+  });
+
   it('reproduces the out-of-order commit problem with BIGSERIAL', async () => {
     // This test demonstrates the gap problem:
     // 1. Transaction T1 starts, gets position 1

@@ -344,7 +344,7 @@ await manager.start();
 
 PostgreSQL's `BIGSERIAL` assigns `global_position` before commit, so transaction T1 (position 100) might commit after T2 (position 101). Without protection, a projection reading up to position 101 would permanently skip position 100.
 
-**Solution**: Projections use the `useSafePosition: true` stream option, which computes a "safe position" using PostgreSQL's transaction visibility system (`xmin` + `txid_current_snapshot()`). Events are only processed up to the highest position where all earlier transactions have committed.
+**Solution**: Each event stores `tx_id` (`pg_current_xact_id()` at insert). Projections use `useSafePosition: true`, which computes the highest `global_position` with no lower position still in-flight (`tx_id >= pg_snapshot_xmin(pg_current_snapshot())`). See [`.docs/safe-position-design.md`](./.docs/safe-position-design.md).
 
 - **Performance**: Safe position queries are fast (~1ms) and do not require schema changes.
 - **Latency**: Projections may lag by 10-100ms during high write concurrency, which is acceptable for most use cases.
