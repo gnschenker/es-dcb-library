@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterAll } from 'vitest';
 import pg from 'pg';
-import { PostgresEventStore, queryItem, query } from '../../src/index.js';
+import { PostgresEventStore, queryItem, query, UNTAGGED } from '../../src/index.js';
 import { createTestPool, resetDatabase } from './helpers.js';
 
 let pool: pg.Pool;
@@ -31,14 +31,22 @@ describe('PostgresEventStore - Tag Model (Integration)', () => {
       expect(stored!.globalPosition).toBeGreaterThan(0n);
     });
 
-    it('tags are required (not optional)', async () => {
-      // Without tags, must explicitly pass empty array
-      const [stored] = await store.append({
+    it('rejects append without extractor, explicit tags, or UNTAGGED marker', async () => {
+      await expect(
+        store.append({
+          type: 'EventWithoutTags',
+          data: {},
+        }),
+      ).rejects.toThrow(/no registered tag extractor/);
+
+      const storeWithUntagged = new PostgresEventStore({
+        pool,
+        tagExtractors: { EventWithoutTags: UNTAGGED },
+      });
+      const [stored] = await storeWithUntagged.append({
         type: 'EventWithoutTags',
         data: {},
-        tags: [],
       });
-
       expect(stored!.tags).toEqual([]);
     });
   });

@@ -152,24 +152,22 @@ export async function enrollStudent(
   // Load once with a single version
   const { events, version } = await store.load(allStreams);
   
-  // Split events for each reducer
-  const studentTags = new Set([`student:${input.studentId}`]);
-  const courseTags = new Set([`course:${input.courseId}`]);
-  const enrollmentTags = new Set([`student:${input.studentId}`, `course:${input.courseId}`]);
-  
-  const studentEvents = events.filter(e => 
-    studentTags.has(e.tags[0] ?? '') && 
+  const studentTag = `student:${input.studentId}`;
+  const courseTag = `course:${input.courseId}`;
+
+  const studentEvents = events.filter(e =>
+    e.tags.includes(studentTag) &&
     ['StudentRegistered', 'StudentPassedCourse', 'StudentFailedCourse'].includes(e.type)
   );
-  const courseEvents = events.filter(e => 
-    courseTags.has(e.tags[0] ?? '') &&
+  const courseEvents = events.filter(e =>
+    e.tags.includes(courseTag) &&
     ['CourseCreated', 'CoursePublished', 'CourseClosed', 'CourseCancelled', 'TeacherAssignedToCourse', 'TeacherRemovedFromCourse'].includes(e.type)
   );
-  const enrollmentEvents = events.filter(e => 
-    e.tags.length >= 2 && e.tags.includes(`student:${input.studentId}`) && e.tags.includes(`course:${input.courseId}`)
+  const enrollmentEvents = events.filter(e =>
+    e.tags.includes(studentTag) && e.tags.includes(courseTag)
   );
-  const courseEnrollEvents = events.filter(e => 
-    courseTags.has(e.tags[0] ?? '') &&
+  const courseEnrollEvents = events.filter(e =>
+    e.tags.includes(courseTag) &&
     ['StudentEnrolled', 'StudentDropped', 'StudentWithdrew'].includes(e.type)
   );
 

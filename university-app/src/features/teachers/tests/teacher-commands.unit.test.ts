@@ -16,19 +16,11 @@ import {
   TeacherAssignedToOpenCourseError,
 } from '../../../domain/errors.js';
 import { systemClock } from '../../../domain/clock.js';
+import { makeEvent, resetEventPositions } from '../../../../tests/unit/event-fixtures.js';
 
-let pos = 1n;
-function makeEvent(type: string, data: Record<string, unknown>): StoredEvent {
-  return {
-    globalPosition: pos++,
-    eventId: `evt-${String(pos)}`,
-    type,
-    data,
-    metadata: null,
-    occurredAt: new Date(),
-    tags: [],
-  };
-}
+beforeEach(() => {
+  resetEventPositions();
+});
 
 function makeMockStore(overrides: Partial<EventStore> = {}): EventStore {
   return {

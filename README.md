@@ -246,7 +246,6 @@ await store.append(newEvents, {
 ```
 
 **Why this matters**: Loading streams separately and picking `max(version1, version2, version3)` is error-prone. A single combined query ensures correct concurrency checking.
-```
 
 ### Tag Extractors
 

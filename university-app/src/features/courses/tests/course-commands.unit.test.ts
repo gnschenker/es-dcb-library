@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { StoredEvent, EventStore } from 'es-dcb-library';
 import { createCourse } from '../create-course.js';
 import { reduceCourseForPublish, reduceTeacherForPublish } from '../publish-course.js';
@@ -11,19 +11,11 @@ import {
   PrerequisiteNotFoundError,
 } from '../../../domain/errors.js';
 import { systemClock } from '../../../domain/clock.js';
+import { makeEvent, resetEventPositions } from '../../../../tests/unit/event-fixtures.js';
 
-let pos = 1n;
-function makeEvent(type: string, data: Record<string, unknown>): StoredEvent {
-  return {
-    globalPosition: pos++,
-    eventId: `evt-${String(pos)}`,
-    type,
-    data,
-    metadata: null,
-    occurredAt: new Date(),
-    tags: [],
-  };
-}
+beforeEach(() => {
+  resetEventPositions();
+});
 
 function makeMockStore(overrides: Partial<EventStore> = {}): EventStore {
   return {
