@@ -1,5 +1,5 @@
 import type { EventStore, NewEvent } from 'es-dcb-library';
-import { query } from 'es-dcb-library';
+import { query, queryItem } from 'es-dcb-library';
 import type { Clock } from '../../domain/clock.js';
 import { studentIdFromEmail } from '../../domain/ids.js';
 import { StudentAlreadyRegisteredError } from '../../domain/errors.js';
@@ -7,10 +7,12 @@ import type { StudentRegisteredPayload } from '../../domain/events.js';
 
 // Private to this slice
 function studentStream(studentId: string) {
-  return query
-    .eventsOfType('StudentRegistered').where.key('studentId').equals(studentId)
-    .eventsOfType('StudentPassedCourse').where.key('studentId').equals(studentId)
-    .eventsOfType('StudentFailedCourse').where.key('studentId').equals(studentId);
+  return query([
+    { types: ['StudentRegistered'], tags: [`student:${studentId}`] },
+    { types: ['StudentPassedCourse'], tags: [`student:${studentId}`] },
+    { types: ['StudentFailedCourse'], tags: [`student:${studentId}`] },
+  ]);
+
 }
 
 export interface RegisterStudentInput {
@@ -33,7 +35,7 @@ export async function registerStudent(
     );
   }
 
-  const payload: StudentRegisteredPayload = {
+  const data: StudentRegisteredPayload = {
     studentId,
     name: input.name,
     email: input.email,
@@ -42,8 +44,8 @@ export async function registerStudent(
   };
 
   await store.append(
-    [{ type: 'StudentRegistered', payload: payload as unknown as Record<string, unknown> } as NewEvent],
-    { query: studentStream(studentId), expectedVersion: 0n },
+    [{ type: 'StudentRegistered', data: data as unknown as Record<string, unknown>, tags: [] } as NewEvent],
+    { failIfEventsMatch: studentStream(studentId), after: 0n },
   );
 
   return { studentId };

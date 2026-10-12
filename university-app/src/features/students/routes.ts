@@ -1,19 +1,20 @@
 import type { FastifyInstance } from 'fastify';
 import type { EventStore, StoredEvent } from 'es-dcb-library';
-import { query } from 'es-dcb-library';
+import { query, queryItem } from 'es-dcb-library';
 import type { Clock } from '../../domain/clock.js';
 import { registerStudent } from './register-student.js';
 
 function studentStream(studentId: string) {
-  return query
-    .eventsOfType('StudentRegistered').where.key('studentId').equals(studentId)
-    .eventsOfType('StudentPassedCourse').where.key('studentId').equals(studentId)
-    .eventsOfType('StudentFailedCourse').where.key('studentId').equals(studentId);
+  return query([
+    { types: ['StudentRegistered'], tags: [`student:${studentId}`] },
+    { types: ['StudentPassedCourse'], tags: [`student:${studentId}`] },
+    { types: ['StudentFailedCourse'], tags: [`student:${studentId}`] },
+  ]);
+
 }
 
 function studentEnrollmentHistoryStream(studentId: string) {
-  return query
-    .eventsOfType('StudentEnrolled').where.key('studentId').equals(studentId)
+  return queryItem({ types: ['StudentEnrolled'], tags: [`studentId:${studentId}`] })
     .eventsOfType('StudentDropped').where.key('studentId').equals(studentId)
     .eventsOfType('StudentWithdrew').where.key('studentId').equals(studentId)
     .eventsOfType('StudentGraded').where.key('studentId').equals(studentId)
@@ -33,7 +34,7 @@ interface StudentReadState {
 function reduceStudentForRead(events: StoredEvent[]): StudentReadState | null {
   for (const event of events) {
     if (event.type === 'StudentRegistered') {
-      const p = event.payload;
+      const p = event.data;
       return {
         registered: true,
         studentId: p['studentId'] as string,
@@ -56,7 +57,7 @@ function reduceCourseHistory(events: StoredEvent[]): Map<string, {
     grade?: number;
   }>();
   for (const event of events) {
-    const courseId = event.payload['courseId'] as string | undefined;
+    const courseId = event.data['courseId'] as string | undefined;
     if (!courseId) continue;
     const existing = courses.get(courseId);
     if (event.type === 'StudentEnrolled') {
@@ -66,7 +67,7 @@ function reduceCourseHistory(events: StoredEvent[]): Map<string, {
     } else if (event.type === 'StudentWithdrew') {
       courses.set(courseId, { status: 'withdrew' });
     } else if (event.type === 'StudentGraded') {
-      courses.set(courseId, { status: 'graded', grade: event.payload['grade'] as number });
+      courses.set(courseId, { status: 'graded', grade: event.data['grade'] as number });
     } else if (event.type === 'StudentPassedCourse') {
       const grade = existing?.grade;
       courses.set(courseId, grade !== undefined ? { status: 'passed', grade } : { status: 'passed' });

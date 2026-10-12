@@ -1,5 +1,5 @@
 import type { EventStore, StoredEvent, NewEvent } from 'es-dcb-library';
-import { query } from 'es-dcb-library';
+import { query, queryItem } from 'es-dcb-library';
 import type { Clock } from '../../domain/clock.js';
 import {
   CourseNotFoundError,
@@ -11,19 +11,21 @@ import type { TeacherAssignedToCoursePayload } from '../../domain/events.js';
 
 // Private to this slice
 function courseStream(courseId: string) {
-  return query
-    .eventsOfType('CourseCreated').where.key('courseId').equals(courseId)
-    .eventsOfType('CoursePublished').where.key('courseId').equals(courseId)
-    .eventsOfType('CourseClosed').where.key('courseId').equals(courseId)
-    .eventsOfType('CourseCancelled').where.key('courseId').equals(courseId)
-    .eventsOfType('TeacherAssignedToCourse').where.key('courseId').equals(courseId)
-    .eventsOfType('TeacherRemovedFromCourse').where.key('courseId').equals(courseId);
+  return query([
+    { types: ['CourseCreated'], tags: [`course:${courseId}`] },
+    { types: ['CoursePublished'], tags: [`course:${courseId}`] },
+    { types: ['CourseClosed'], tags: [`course:${courseId}`] },
+    { types: ['CourseCancelled'], tags: [`course:${courseId}`] },
+    { types: ['TeacherAssignedToCourse'], tags: [`course:${courseId}`] },
+    { types: ['TeacherRemovedFromCourse'], tags: [`course:${courseId}`] },
+  ]);
 }
 
 function teacherStream(teacherId: string) {
-  return query
-    .eventsOfType('TeacherHired').where.key('teacherId').equals(teacherId)
-    .eventsOfType('TeacherDismissed').where.key('teacherId').equals(teacherId);
+  return query([
+    { types: ['TeacherHired'], tags: [`teacher:${teacherId}`] },
+    { types: ['TeacherDismissed'], tags: [`teacher:${teacherId}`] },
+  ]);
 }
 
 // Exported reducers (for unit tests)
@@ -85,14 +87,14 @@ export async function assignTeacher(
   }
 
   // Re-assigning the same teacher is allowed (idempotent for MVP)
-  const payload: TeacherAssignedToCoursePayload = {
+  const data: TeacherAssignedToCoursePayload = {
     courseId: input.courseId,
     teacherId: input.teacherId,
     assignedAt: clock.now().toISOString(),
   };
 
   await store.append(
-    [{ type: 'TeacherAssignedToCourse', payload: payload as unknown as Record<string, unknown> } as NewEvent],
-    { query: courseStream(input.courseId), expectedVersion: courseVersion },
+    [{ type: 'TeacherAssignedToCourse', data: data as unknown as Record<string, unknown>, tags: [] } as NewEvent],
+    { failIfEventsMatch: courseStream(input.courseId), after: courseVersion },
   );
 }

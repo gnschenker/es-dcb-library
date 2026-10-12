@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { query } from 'es-dcb-library';
+import { query, queryItem } from 'es-dcb-library';
 import { createTestStore, clearEvents } from '../../../../tests/integration/helpers.js';
 import { systemClock } from '../../../domain/clock.js';
 import { teacherIdFromEmail } from '../../../domain/ids.js';
@@ -39,8 +39,8 @@ describe('HireTeacher', () => {
     const { events } = await store.load(teacherStream);
     expect(events).toHaveLength(1);
     expect(events[0]?.type).toBe('TeacherHired');
-    expect(events[0]?.payload['name']).toBe('Dr. Smith');
-    expect(events[0]?.payload['department']).toBe('CS');
+    expect(events[0]?.data['name']).toBe('Dr. Smith');
+    expect(events[0]?.data['department']).toBe('CS');
     await store.close();
   });
 
@@ -76,8 +76,8 @@ describe('DismissTeacher', () => {
       const { events } = await store.load(teacherStream);
       const dismissed = events.find(e => e.type === 'TeacherDismissed');
       expect(dismissed).toBeDefined();
-      expect(dismissed?.payload['teacherId']).toBe(teacherId);
-      expect(dismissed?.payload['reason']).toBe('budget cuts');
+      expect(dismissed?.data['teacherId']).toBe(teacherId);
+      expect(dismissed?.data['reason']).toBe('budget cuts');
     } finally {
       await store.close();
     }

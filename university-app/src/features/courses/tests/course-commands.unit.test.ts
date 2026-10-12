@@ -13,14 +13,15 @@ import {
 import { systemClock } from '../../../domain/clock.js';
 
 let pos = 1n;
-function makeEvent(type: string, payload: Record<string, unknown>): StoredEvent {
+function makeEvent(type: string, data: Record<string, unknown>): StoredEvent {
   return {
     globalPosition: pos++,
     eventId: `evt-${String(pos)}`,
     type,
-    payload,
+    data,
     metadata: null,
     occurredAt: new Date(),
+    tags: [],
   };
 }
 
@@ -72,8 +73,8 @@ describe('createCourse validations', () => {
   it('defaults passingGrade to 60 when not provided', async () => {
     const store = makeMockStore();
     await createCourse(store, systemClock, { title: 'T', semester: 'F24', creditHours: 3, maxStudents: 10, dropDeadline: '2024-09-15', withdrawalDeadline: '2024-10-15' });
-    const appendCall = vi.mocked(store.append).mock.calls[0] as unknown as [Array<{ type: string; payload: Record<string, unknown> }>];
-    expect(appendCall[0]?.[0]?.payload['passingGrade']).toBe(60);
+    const appendCall = vi.mocked(store.append).mock.calls[0] as unknown as [Array<{ type: string; data: Record<string, unknown> }>];
+    expect(appendCall[0]?.[0]?.data['passingGrade']).toBe(60);
   });
 
   it('throws PrerequisiteNotFoundError for non-existent prerequisite', async () => {

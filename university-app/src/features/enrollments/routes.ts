@@ -1,19 +1,20 @@
 import type { FastifyInstance } from 'fastify';
 import type { EventStore, StoredEvent } from 'es-dcb-library';
-import { query } from 'es-dcb-library';
+import { query, queryItem } from 'es-dcb-library';
 import type { Clock } from '../../domain/clock.js';
 import { enrollStudent } from './enroll-student.js';
 import { unenrollStudent } from './unenroll-student.js';
 import { gradeStudent } from './grade-student.js';
 
 function courseStream(courseId: string) {
-  return query
-    .eventsOfType('CourseCreated').where.key('courseId').equals(courseId)
-    .eventsOfType('CoursePublished').where.key('courseId').equals(courseId)
-    .eventsOfType('CourseClosed').where.key('courseId').equals(courseId)
-    .eventsOfType('CourseCancelled').where.key('courseId').equals(courseId)
-    .eventsOfType('TeacherAssignedToCourse').where.key('courseId').equals(courseId)
-    .eventsOfType('TeacherRemovedFromCourse').where.key('courseId').equals(courseId);
+  return query([
+    { types: ['CourseCreated'], tags: [`course:${courseId}`] },
+    { types: ['CoursePublished'], tags: [`course:${courseId}`] },
+    { types: ['CourseClosed'], tags: [`course:${courseId}`] },
+    { types: ['CourseCancelled'], tags: [`course:${courseId}`] },
+    { types: ['TeacherAssignedToCourse'], tags: [`course:${courseId}`] },
+    { types: ['TeacherRemovedFromCourse'], tags: [`course:${courseId}`] },
+  ]);
 }
 
 function courseEnrollmentStream(courseId: string) {
@@ -64,7 +65,7 @@ function reduceEnrollmentForRead(events: StoredEvent[]): {
     if (event.type === 'StudentEnrolled') { status = 'enrolled'; }
     else if (event.type === 'StudentDropped') { status = 'dropped'; }
     else if (event.type === 'StudentWithdrew') { status = 'withdrew'; }
-    else if (event.type === 'StudentGraded') { status = 'graded'; grade = event.payload['grade'] as number; }
+    else if (event.type === 'StudentGraded') { status = 'graded'; grade = event.data['grade'] as number; }
     else if (event.type === 'StudentPassedCourse') { status = 'passed'; }
     else if (event.type === 'StudentFailedCourse') { status = 'failed'; }
   }
@@ -92,7 +93,7 @@ export async function registerEnrollmentRoutes(
     // Group events by studentId
     const studentIds = new Set<string>();
     for (const event of events) {
-      const studentId = event.payload['studentId'] as string | undefined;
+      const studentId = event.data['studentId'] as string | undefined;
       if (studentId) studentIds.add(studentId);
     }
 
