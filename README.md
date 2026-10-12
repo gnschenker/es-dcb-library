@@ -443,7 +443,7 @@ To enable instrumentation, install `@opentelemetry/api` (optional peer), registe
 observability: { enabled: true }
 ```
 
-You may also pass custom `tracer` / `meter` or `tracerProvider` / `meterProvider`. Scope name: **`es-dcb-library`** (package version). Append/load/stream spans and metrics arrive in P-OTel-02+. For SQL-level traces, use `@opentelemetry/instrumentation-pg` in the application.
+You may also pass custom `tracer` / `meter` or `tracerProvider` / `meterProvider`. Scope name: **`es-dcb-library`** (package version). With `enabled: true`, **`append`** records `es_dcb.append` / `es_dcb.acquire_locks` spans and append metrics (event types and counts only — never payload, metadata, or tag values). Load/stream instrumentation follows in later PRs. For SQL-level traces, use `@opentelemetry/instrumentation-pg` in the application.
 
 ---
 
