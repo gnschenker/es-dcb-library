@@ -10,6 +10,7 @@ const baseRow: EventRow = {
   metadata: { correlationId: 'corr-1' },
   occurred_at: new Date('2024-01-01T00:00:00.000Z'),
   tags: ['order:o1', 'customer:c1'],
+  tx_id: '4242',
 };
 
 describe('mapRow', () => {

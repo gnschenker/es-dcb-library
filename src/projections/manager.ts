@@ -1,5 +1,6 @@
 import pg from 'pg';
-import type { EventStore } from '../types.js';
+import type { EventStore, StreamCursor } from '../types.js';
+import { STREAM_CURSOR_ORIGIN } from '../types.js';
 import type { ProjectionDefinition } from './types.js';
 import {
   sleep,
@@ -39,9 +40,24 @@ export type { ProjectionStatus } from './loop.js';   // re-export for consumers
 export interface ProjectionState {
   name: string;
   status: ProjectionStatus;
+  lastProcessedCursor: StreamCursor;
+  /** Last processed global_position (convenience for callers that only track position). */
   lastProcessedPosition: bigint;
   lastUpdatedAt: Date | null;
   errorDetail?: unknown;
+}
+
+function checkpointRowToCursor(row: {
+  last_tx_id: string | null;
+  last_position: string | null;
+}): StreamCursor {
+  if (row.last_tx_id == null || row.last_position == null) {
+    return STREAM_CURSOR_ORIGIN;
+  }
+  return {
+    txId: row.last_tx_id,
+    globalPosition: BigInt(row.last_position),
+  };
 }
 
 export class ProjectionManager {
@@ -190,15 +206,18 @@ export class ProjectionManager {
     const def = this.config.projections.find((d) => d.name === projectionName);
     if (!def) return;
 
-    const result = await this.config.pool.query<{ last_position: string | null }>(
-      'SELECT last_position FROM projection_checkpoints WHERE name = $1',
+    const result = await this.config.pool.query<{
+      last_tx_id: string | null;
+      last_position: string | null;
+    }>(
+      'SELECT last_tx_id, last_position FROM projection_checkpoints WHERE name = $1',
       [projectionName],
     );
-    const lastPos = result.rows[0]?.last_position != null
-      ? BigInt(result.rows[0].last_position)
-      : 0n;
+    const lastCursor = checkpointRowToCursor(
+      result.rows[0] ?? { last_tx_id: null, last_position: null },
+    );
 
-    state.lastPos = lastPos;
+    state.lastCursor = lastCursor;
     state.errorDetail = undefined;
     state.status = 'pending';
     state.stopRequested = false;
@@ -218,7 +237,8 @@ export class ProjectionManager {
     return [...this.loopStates.values()].map((state) => ({
       name: state.name,
       status: state.status,
-      lastProcessedPosition: state.lastPos,
+      lastProcessedCursor: state.lastCursor,
+      lastProcessedPosition: state.lastCursor.globalPosition,
       lastUpdatedAt: state.lastUpdatedAt,
       errorDetail: state.errorDetail,
     }));
@@ -246,17 +266,23 @@ export class ProjectionManager {
     }
 
     // Read initial checkpoint
-    const result = await this.config.pool.query<{ last_position: string | null; updated_at: Date | null }>(
-      'SELECT last_position, updated_at FROM projection_checkpoints WHERE name = $1',
+    const result = await this.config.pool.query<{
+      last_tx_id: string | null;
+      last_position: string | null;
+      updated_at: Date | null;
+    }>(
+      'SELECT last_tx_id, last_position, updated_at FROM projection_checkpoints WHERE name = $1',
       [def.name],
     );
     const row = result.rows[0];
-    const lastPos = row?.last_position != null ? BigInt(row.last_position) : 0n;
+    const lastCursor = checkpointRowToCursor(
+      row ?? { last_tx_id: null, last_position: null },
+    );
 
     const state: ProjectionLoopState = {
       name: def.name,
       status: 'pending',
-      lastPos,
+      lastCursor,
       lastUpdatedAt: row?.updated_at ?? null,
       stopRequested: false,
       stopSignal: triggerStop,

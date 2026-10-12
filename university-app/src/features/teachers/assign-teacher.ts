@@ -1,5 +1,5 @@
 import type { EventStore, StoredEvent, NewEvent } from 'es-dcb-library';
-import { query, queryItem } from 'es-dcb-library';
+import { query, queryItem, combineQueries } from 'es-dcb-library';
 import type { Clock } from '../../domain/clock.js';
 import {
   CourseNotFoundError,
@@ -60,13 +60,15 @@ export async function assignTeacher(
   clock: Clock,
   input: AssignTeacherInput,
 ): Promise<void> {
-  const [
-    { events: courseEvents, version: courseVersion },
-    { events: teacherEvents },
-  ] = await Promise.all([
-    store.load(courseStream(input.courseId)),
-    store.load(teacherStream(input.teacherId)),
-  ]);
+  const allStreams = combineQueries(
+    courseStream(input.courseId),
+    teacherStream(input.teacherId),
+  );
+  
+  const { events, version } = await store.load(allStreams);
+  
+  const courseEvents = events.filter(e => e.tags.includes(`course:${input.courseId}`));
+  const teacherEvents = events.filter(e => e.tags.includes(`teacher:${input.teacherId}`));
 
   const courseState = reduceCourseForAssign(courseEvents);
   if (courseState.status === 'none') {
@@ -86,7 +88,6 @@ export async function assignTeacher(
     throw new TeacherDismissedError(`Teacher '${input.teacherId}' is dismissed`);
   }
 
-  // Re-assigning the same teacher is allowed (idempotent for MVP)
   const data: TeacherAssignedToCoursePayload = {
     courseId: input.courseId,
     teacherId: input.teacherId,
@@ -95,6 +96,6 @@ export async function assignTeacher(
 
   await store.append(
     [{ type: 'TeacherAssignedToCourse', data: data as unknown as Record<string, unknown>} as NewEvent],
-    { failIfEventsMatch: courseStream(input.courseId), after: courseVersion },
+    { failIfEventsMatch: allStreams, after: version },
   );
 }

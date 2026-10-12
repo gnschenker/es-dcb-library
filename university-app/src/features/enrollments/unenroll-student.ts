@@ -1,5 +1,5 @@
 import type { EventStore, StoredEvent, NewEvent } from 'es-dcb-library';
-import { query, queryItem } from 'es-dcb-library';
+import { query, queryItem, combineQueries } from 'es-dcb-library';
 import type { Clock } from '../../domain/clock.js';
 import {
   StudentNotEnrolledError,
@@ -88,13 +88,20 @@ export async function unenrollStudent(
   clock: Clock,
   input: UnenrollStudentInput,
 ): Promise<void> {
-  const [
-    { events: enrollmentEvents, version: enrollmentVersion },
-    { events: courseEvents },
-  ] = await Promise.all([
-    store.load(enrollmentStream(input.studentId, input.courseId)),
-    store.load(courseStream(input.courseId)),
-  ]);
+  const allStreams = combineQueries(
+    enrollmentStream(input.studentId, input.courseId),
+    courseStream(input.courseId),
+  );
+  
+  const { events, version } = await store.load(allStreams);
+  
+  const enrollmentEvents = events.filter(e => 
+    e.tags.includes(`student:${input.studentId}`) && e.tags.includes(`course:${input.courseId}`)
+  );
+  const courseEvents = events.filter(e => 
+    e.tags.includes(`course:${input.courseId}`) &&
+    ['CourseCreated', 'CoursePublished', 'CourseClosed', 'CourseCancelled', 'TeacherAssignedToCourse', 'TeacherRemovedFromCourse'].includes(e.type)
+  );
 
   const enrollmentState = reduceEnrollmentForUnenroll(enrollmentEvents);
 
@@ -140,6 +147,6 @@ export async function unenrollStudent(
 
   await store.append(
     [event],
-    { failIfEventsMatch: enrollmentStream(input.studentId, input.courseId), after: enrollmentVersion },
+    { failIfEventsMatch: allStreams, after: version },
   );
 }

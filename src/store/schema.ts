@@ -8,8 +8,14 @@ CREATE TABLE IF NOT EXISTS events (
   data             JSONB        NOT NULL,
   metadata         JSONB,
   occurred_at      TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
-  tags             TEXT[]       NOT NULL
+  tags             TEXT[]       NOT NULL,
+  tx_id            xid8         NOT NULL DEFAULT pg_current_xact_id()
 )
+`.trim();
+
+export const DDL_CREATE_TX_ID_POSITION_INDEX = `
+CREATE INDEX IF NOT EXISTS idx_events_tx_id_position
+  ON events (tx_id, global_position)
 `.trim();
 
 export const DDL_CREATE_TAGS_INDEX = `
@@ -40,6 +46,7 @@ export async function applySchema(client: pg.ClientBase): Promise<void> {
   await client.query(DDL_CREATE_TABLE);
   await client.query(DDL_CREATE_TAGS_INDEX);
   await client.query(DDL_CREATE_TYPE_POSITION_INDEX);
+  await client.query(DDL_CREATE_TX_ID_POSITION_INDEX);
   await client.query(DDL_CREATE_BRIN_INDEX);
   await client.query(DDL_TUNE_AUTOVACUUM);
 }

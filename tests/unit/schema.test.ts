@@ -3,6 +3,7 @@ import {
   DDL_CREATE_TABLE,
   DDL_CREATE_TAGS_INDEX,
   DDL_CREATE_TYPE_POSITION_INDEX,
+  DDL_CREATE_TX_ID_POSITION_INDEX,
   DDL_CREATE_BRIN_INDEX,
   DDL_TUNE_AUTOVACUUM,
   applySchema,
@@ -12,6 +13,7 @@ const ALL_DDL = [
   DDL_CREATE_TABLE,
   DDL_CREATE_TAGS_INDEX,
   DDL_CREATE_TYPE_POSITION_INDEX,
+  DDL_CREATE_TX_ID_POSITION_INDEX,
   DDL_CREATE_BRIN_INDEX,
   DDL_TUNE_AUTOVACUUM,
 ].join('\n');
@@ -57,6 +59,17 @@ describe('DDL_CREATE_TABLE', () => {
     expect(DDL_CREATE_TABLE).toContain('TEXT[]');
     expect(DDL_CREATE_TABLE).toMatch(/tags\s+TEXT\[\]\s+NOT NULL/i);
     expect(DDL_CREATE_TABLE).not.toMatch(/tags.*DEFAULT/i);
+  });
+
+  it('defines tx_id as xid8 with pg_current_xact_id() default', () => {
+    expect(DDL_CREATE_TABLE).toMatch(/tx_id\s+xid8\s+NOT NULL\s+DEFAULT pg_current_xact_id\(\)/i);
+  });
+});
+
+describe('DDL_CREATE_TX_ID_POSITION_INDEX', () => {
+  it('creates idx_events_tx_id_position on (tx_id, global_position)', () => {
+    expect(DDL_CREATE_TX_ID_POSITION_INDEX).toContain('idx_events_tx_id_position');
+    expect(DDL_CREATE_TX_ID_POSITION_INDEX).toContain('(tx_id, global_position)');
   });
 });
 
@@ -130,11 +143,11 @@ describe('No payload index', () => {
 });
 
 describe('applySchema()', () => {
-  it('calls client.query exactly 5 times', async () => {
+  it('calls client.query exactly 6 times', async () => {
     const mockQuery = vi.fn().mockResolvedValue({ rows: [], rowCount: 0 });
     const mockClient = { query: mockQuery } as unknown as Parameters<typeof applySchema>[0];
     await applySchema(mockClient);
-    expect(mockQuery).toHaveBeenCalledTimes(5);
+    expect(mockQuery).toHaveBeenCalledTimes(6);
   });
 
   it('executes DDL statements in the correct order', async () => {
@@ -150,7 +163,8 @@ describe('applySchema()', () => {
     expect(calls[0]).toBe(DDL_CREATE_TABLE);
     expect(calls[1]).toBe(DDL_CREATE_TAGS_INDEX);
     expect(calls[2]).toBe(DDL_CREATE_TYPE_POSITION_INDEX);
-    expect(calls[3]).toBe(DDL_CREATE_BRIN_INDEX);
-    expect(calls[4]).toBe(DDL_TUNE_AUTOVACUUM);
+    expect(calls[3]).toBe(DDL_CREATE_TX_ID_POSITION_INDEX);
+    expect(calls[4]).toBe(DDL_CREATE_BRIN_INDEX);
+    expect(calls[5]).toBe(DDL_TUNE_AUTOVACUUM);
   });
 });

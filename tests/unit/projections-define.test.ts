@@ -17,6 +17,7 @@ function mockEvent(type: string, data: Record<string, unknown> = {}): StoredEven
     metadata: null,
     occurredAt: new Date(),
     tags: [],
+    txId: '1',
   };
 }
 

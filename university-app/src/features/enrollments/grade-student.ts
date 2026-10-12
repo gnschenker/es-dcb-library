@@ -1,5 +1,5 @@
 import type { EventStore, StoredEvent, NewEvent } from 'es-dcb-library';
-import { query, queryItem } from 'es-dcb-library';
+import { query, queryItem, combineQueries } from 'es-dcb-library';
 import type { Clock } from '../../domain/clock.js';
 import {
   InvalidGradeError,
@@ -125,15 +125,25 @@ export async function gradeStudent(
     throw new InvalidGradeError(`Grade must be between 0 and 100, got ${input.grade}`);
   }
 
-  const [
-    { events: enrollmentEvents, version: enrollmentVersion },
-    { events: courseEvents },
-    { events: teacherEvents },
-  ] = await Promise.all([
-    store.load(enrollmentStream(input.studentId, input.courseId)),
-    store.load(courseStream(input.courseId)),
-    store.load(teacherStream(input.gradedBy)),
-  ]);
+  const allStreams = combineQueries(
+    enrollmentStream(input.studentId, input.courseId),
+    courseStream(input.courseId),
+    teacherStream(input.gradedBy),
+  );
+  
+  const { events, version } = await store.load(allStreams);
+  
+  const enrollmentEvents = events.filter(e => 
+    e.tags.includes(`student:${input.studentId}`) && e.tags.includes(`course:${input.courseId}`)
+  );
+  const courseEvents = events.filter(e => 
+    e.tags.includes(`course:${input.courseId}`) &&
+    ['CourseCreated', 'CoursePublished', 'CourseClosed', 'CourseCancelled', 'TeacherAssignedToCourse', 'TeacherRemovedFromCourse'].includes(e.type)
+  );
+  const teacherEvents = events.filter(e => 
+    e.tags.includes(`teacher:${input.gradedBy}`) &&
+    ['TeacherHired', 'TeacherDismissed'].includes(e.type)
+  );
 
   const enrollmentState = reduceEnrollmentForGrade(enrollmentEvents);
   if (enrollmentState.status === 'none' || enrollmentState.status === 'dropped' || enrollmentState.status === 'withdrew') {
@@ -193,6 +203,6 @@ export async function gradeStudent(
         data: outcomePayload as unknown as Record<string, unknown>,
       } as NewEvent,
     ],
-    { failIfEventsMatch: enrollmentStream(input.studentId, input.courseId), after: enrollmentVersion },
+    { failIfEventsMatch: allStreams, after: version },
   );
 }

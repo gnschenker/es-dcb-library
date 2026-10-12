@@ -1,10 +1,13 @@
 import pg from 'pg';
 import type { Query } from '../query/types.js';
 import type { NewEvent, StoredEvent, LoadResult, AppendCondition, StreamOptions, EventStore, TagExtractor } from '../types.js';
-import { ConcurrencyError, EventStoreError } from '../errors.js';
-import { compileLoadQuery, compileExistsQuery, compileVersionCheckQuery, compileStreamQuery, extractLockPairs } from '../query/compiler.js';
+import { UNTAGGED } from '../types.js';
+import { ConcurrencyError, EventStoreError, MissingTagExtractorError } from '../errors.js';
+import { compileLoadQuery, compileExistsQuery, compileVersionCheckQuery, compileStreamQuery, compileCommittedStreamQuery, extractLockPairs } from '../query/compiler.js';
 import { applySchema } from './schema.js';
 import { mapRow } from './row-mapper.js';
+import { STREAM_CURSOR_ORIGIN } from '../types.js';
+import type { StreamCursor } from '../types.js';
 
 export interface EventStoreConfig {
   pool: pg.Pool;
@@ -12,13 +15,20 @@ export interface EventStoreConfig {
    * Tag extractors per event type.
    * Called for each event to derive tags from the event data.
    * Tags are merged with event.tags (if present) and deduplicated.
+   * 
+   * Use the UNTAGGED symbol to mark event types that are intentionally untagged:
+   * @example
+   * tagExtractors: {
+   *   OrderCreated: (event) => [`order:${event.data.orderId}`],
+   *   SystemEvent: UNTAGGED,  // intentionally has no tags
+   * }
    */
-  tagExtractors?: Record<string, TagExtractor>;
+  tagExtractors?: Record<string, TagExtractor | typeof UNTAGGED>;
 }
 
 export class PostgresEventStore implements EventStore {
   private readonly pool: pg.Pool;
-  private readonly tagExtractors: Record<string, TagExtractor>;
+  private readonly tagExtractors: Record<string, TagExtractor | typeof UNTAGGED>;
 
   constructor(config: EventStoreConfig) {
     this.pool = config.pool;
@@ -100,13 +110,31 @@ export class PostgresEventStore implements EventStore {
       for (const event of eventList) {
         // Compute final tags: merge event.tags with extracted tags
         const eventTags = event.tags ?? [];
-        const extractor = this.tagExtractors[event.type];
-        const extractedTags = extractor ? extractor(event) : [];
+        const extractorOrMarker = this.tagExtractors[event.type];
+        
+        let extractedTags: string[] = [];
+        
+        if (extractorOrMarker === UNTAGGED) {
+          // Type is marked as intentionally untagged
+          extractedTags = [];
+        } else if (typeof extractorOrMarker === 'function') {
+          // Extractor function exists
+          extractedTags = extractorOrMarker(event);
+        } else if (eventTags.length === 0) {
+          // No extractor, no explicit tags -> fail loudly
+          throw new MissingTagExtractorError(
+            event.type,
+            `Event type '${event.type}' has no registered tag extractor and no explicit tags were provided. ` +
+            `Either register a tag extractor, mark it as UNTAGGED, or pass tags explicitly in the event.`
+          );
+        }
+        // If eventTags.length > 0 but no extractor, allow it (explicit tags provided)
+        
         const finalTags = [...new Set([...eventTags, ...extractedTags])]; // deduplicate
 
         const sql = `INSERT INTO events (type, data, metadata, tags)
         VALUES ($1, $2::jsonb, $3::jsonb, $4)
-        RETURNING global_position, event_id, type, data, metadata, occurred_at, tags`.trim();
+        RETURNING global_position, event_id, type, data, metadata, occurred_at, tags, tx_id`.trim();
         const params = [event.type, event.data, event.metadata ?? null, finalTags];
         let result: pg.QueryResult;
         try {
@@ -121,7 +149,7 @@ export class PostgresEventStore implements EventStore {
       await client.query('COMMIT');
       return stored;
     } catch (err) {
-      if (!(err instanceof EventStoreError) && !(err instanceof ConcurrencyError)) {
+      if (!(err instanceof EventStoreError) && !(err instanceof ConcurrencyError) && !(err instanceof MissingTagExtractorError)) {
         await client.query('ROLLBACK').catch(() => undefined);
         throw new EventStoreError(`Failed to append events: ${String(err)}`, err);
       }
@@ -133,6 +161,30 @@ export class PostgresEventStore implements EventStore {
 
   async *stream(query: Query, options: StreamOptions = {}): AsyncGenerator<StoredEvent> {
     const batchSize = options.batchSize ?? 100;
+
+    if (options.committedOnly) {
+      let cursor: StreamCursor = options.afterCursor ?? STREAM_CURSOR_ORIGIN;
+
+      while (true) {
+        const { sql, params } = compileCommittedStreamQuery(query, cursor, batchSize);
+        let result: pg.QueryResult;
+        try {
+          result = await this.pool.query(sql, params as unknown[]);
+        } catch (err) {
+          throw new EventStoreError(`Failed to stream events: ${String(err)}`, err);
+        }
+
+        for (const row of result.rows) {
+          const event = mapRow(row);
+          yield event;
+          cursor = { txId: event.txId, globalPosition: event.globalPosition };
+        }
+
+        if (result.rowCount === null || result.rowCount < batchSize) break;
+      }
+      return;
+    }
+
     let lastPosition = options.afterPosition ?? 0n;
 
     while (true) {

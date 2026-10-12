@@ -1,5 +1,6 @@
 import pg from 'pg';
-import type { StoredEvent, EventStore } from '../types.js';
+import type { StoredEvent, EventStore, StreamCursor } from '../types.js';
+import { STREAM_CURSOR_ORIGIN } from '../types.js';
 import type { ProjectionDefinition } from './types.js';
 
 /** Internal: sleep for ms milliseconds */
@@ -26,7 +27,7 @@ export type ProjectionStatus = 'pending' | 'catching-up' | 'live' | 'error' | 's
 export interface ProjectionLoopState {
   name: string;
   status: ProjectionStatus;
-  lastPos: bigint;
+  lastCursor: StreamCursor;
   lastUpdatedAt: Date | null;
   errorDetail?: unknown;
   stopRequested: boolean;
@@ -52,9 +53,9 @@ export async function processEvent(
     if (!dryRun) {
       await client.query(
         `UPDATE projection_checkpoints
-         SET last_position = $1, updated_at = NOW()
-         WHERE name = $2`,
-        [event.globalPosition, def.name],
+         SET last_tx_id = $1, last_position = $2, updated_at = NOW()
+         WHERE name = $3`,
+        [event.txId, event.globalPosition, def.name],
       );
       await client.query('COMMIT');
     } else {
@@ -118,8 +119,8 @@ export async function processEventWithRetry(
 
 /**
  * Phase 1: Catch-up loop.
- * Streams all matching events from state.lastPos onward, processes each,
- * and updates state.lastPos. Stops if stopRequested is set.
+ * Streams committed events after state.lastCursor, processes each,
+ * and updates the cursor. Stops if stopRequested is set.
  *
  * Uses keyset pagination via store.stream() — no long-lived transactions,
  * no server-side cursors. Safe to stop early.
@@ -140,14 +141,15 @@ export async function runCatchUp(
   }
 
   const eventStream = store.stream(def.query, {
-    afterPosition: state.lastPos,
+    afterCursor: state.lastCursor,
     batchSize: config.streamBatchSize,
+    committedOnly: true,
   });
 
   for await (const event of eventStream) {
     if (state.stopRequested) break;
     await processEventWithRetry(def, event, pool, state, config);
-    state.lastPos = event.globalPosition;
+    state.lastCursor = { txId: event.txId, globalPosition: event.globalPosition };
     state.lastUpdatedAt = new Date();
   }
 }
@@ -207,7 +209,7 @@ export function createWaitForSignal(
 }
 
 /**
- * Drain all new events since state.lastPos.
+ * Drain all new committed events since state.lastCursor.
  * Used by both the unconditional post-catch-up drain and the live loop.
  */
 async function drainNewEvents(
@@ -218,14 +220,15 @@ async function drainNewEvents(
   config: ResolvedConfig,
 ): Promise<void> {
   const eventStream = store.stream(def.query, {
-    afterPosition: state.lastPos,
+    afterCursor: state.lastCursor,
     batchSize: config.streamBatchSize,
+    committedOnly: true,
   });
 
   for await (const event of eventStream) {
     if (state.stopRequested) break;
     await processEventWithRetry(def, event, pool, state, config);
-    state.lastPos = event.globalPosition;
+    state.lastCursor = { txId: event.txId, globalPosition: event.globalPosition };
     state.lastUpdatedAt = new Date();
   }
 }

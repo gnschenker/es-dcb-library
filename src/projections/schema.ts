@@ -3,6 +3,7 @@ import type pg from 'pg';
 export const DDL_CREATE_CHECKPOINTS_TABLE = `
 CREATE TABLE IF NOT EXISTS projection_checkpoints (
   name          TEXT        PRIMARY KEY,
+  last_tx_id    xid8        NULL,
   last_position BIGINT      NULL,
   updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
 )`.trim();

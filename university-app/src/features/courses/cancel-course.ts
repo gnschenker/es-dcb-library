@@ -1,5 +1,5 @@
 import type { EventStore, StoredEvent, NewEvent } from 'es-dcb-library';
-import { query, queryItem } from 'es-dcb-library';
+import { query, queryItem, combineQueries } from 'es-dcb-library';
 import type { Clock } from '../../domain/clock.js';
 import {
   CourseNotFoundError,
@@ -97,13 +97,21 @@ export async function cancelCourse(
   clock: Clock,
   input: CancelCourseInput,
 ): Promise<void> {
-  const [
-    { events: courseEvents, version: courseVersion },
-    { events: courseEnrollEvents, version: enrollmentVersion },
-  ] = await Promise.all([
-    store.load(courseStream(input.courseId)),
-    store.load(courseEnrollmentStream(input.courseId)),
-  ]);
+  const allStreams = combineQueries(
+    courseStream(input.courseId),
+    courseEnrollmentStream(input.courseId),
+  );
+  
+  const { events, version } = await store.load(allStreams);
+  
+  const courseEvents = events.filter(e => 
+    e.tags.includes(`course:${input.courseId}`) &&
+    ['CourseCreated', 'CoursePublished', 'CourseClosed', 'CourseCancelled', 'TeacherAssignedToCourse', 'TeacherRemovedFromCourse'].includes(e.type)
+  );
+  const courseEnrollEvents = events.filter(e => 
+    e.tags.includes(`course:${input.courseId}`) &&
+    ['StudentEnrolled', 'StudentDropped', 'StudentWithdrew'].includes(e.type)
+  );
 
   const courseState = reduceCourseForCancel(courseEvents);
   if (courseState.status === 'none') {
@@ -113,7 +121,6 @@ export async function cancelCourse(
     throw new CourseAlreadyCancelledError(`Course '${input.courseId}' is already cancelled`);
   }
 
-  // Collect unique student IDs from course enrollment stream
   const studentIds = new Set<string>();
   for (const event of courseEnrollEvents) {
     if (event.type === 'StudentEnrolled') {
@@ -125,14 +132,11 @@ export async function cancelCourse(
   const unenrollEvents: NewEvent[] = [];
 
   for (const studentId of studentIds) {
-    // Per-student load: courseEnrollmentStream lacks grading events; we need to check
-    // if the student has already been graded (graded students skip automated unenrollment per BR-E9)
     const { events: perStudentEvents } = await store.load(
       enrollmentStream(studentId, input.courseId),
     );
     const enrollmentState = reduceEnrollmentForCancel(perStudentEvents);
 
-    // Only unenroll students who are still actively enrolled (not graded/passed/failed/dropped/withdrew)
     if (enrollmentState.status !== 'enrolled') continue;
 
     if (courseState.dropDeadline && now <= new Date(courseState.dropDeadline)) {
@@ -163,11 +167,8 @@ export async function cancelCourse(
   await store.append(
     [...unenrollEvents, { type: 'CourseCancelled', data: cancelPayload as unknown as Record<string, unknown>} as NewEvent],
     {
-      failIfEventsMatch: query([
-        ...courseStream(input.courseId).items,
-        ...courseEnrollmentStream(input.courseId).items,
-      ]),
-      after: courseVersion > enrollmentVersion ? courseVersion : enrollmentVersion,
+      failIfEventsMatch: allStreams,
+      after: version,
     },
   );
 }
