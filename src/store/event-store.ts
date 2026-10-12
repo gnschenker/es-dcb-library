@@ -13,7 +13,10 @@ import type { ObservabilityConfig } from '../observability/index.js';
 
 export interface EventStoreConfig {
   pool: pg.Pool;
-  /** OpenTelemetry configuration (P-OTel-01: wired; spans/metrics in later PRs). */
+  /**
+   * OpenTelemetry (opt-in). Instrumentation runs only when `observability.enabled === true`.
+   * Omitted or unset `enabled` → no-op without loading `@opentelemetry/api`.
+   */
   observability?: ObservabilityConfig;
   /**
    * Tag extractors per event type.

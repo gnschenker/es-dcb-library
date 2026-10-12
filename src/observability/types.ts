@@ -2,8 +2,8 @@ import type { Meter, MeterProvider, Tracer, TracerProvider } from '@opentelemetr
 
 export interface ObservabilityConfig {
   /**
-   * When `false`, the library does not call OpenTelemetry APIs (fast path).
-   * Default: `true` (uses global or configured providers; no-op if no SDK is registered).
+   * Must be `true` to enable instrumentation. Omitted, `false`, or any other value keeps
+   * the library on the local no-op path (no `@opentelemetry/api` load, no global providers).
    */
   enabled?: boolean;
   tracerProvider?: TracerProvider;

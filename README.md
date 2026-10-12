@@ -433,11 +433,17 @@ All design rationale and architecture decisions are in `.docs/`:
 
 ---
 
-## OpenTelemetry (optional)
+## OpenTelemetry (optional, opt-in)
 
-Install `@opentelemetry/api` (peer dependency) and register an SDK in your app. The library exposes `ObservabilityConfig` on `PostgresEventStore` via the `observability` option (`enabled`, custom `tracer` / `meter` or providers). When `enabled: false`, instrumentation is a no-op without calling the global providers.
+By default the library does **not** use OpenTelemetry: omit `observability`, pass `{}`, or leave `enabled` unset/false — all use a local no-op and never load `@opentelemetry/api`.
 
-Tracer and meter scope: **`es-dcb-library`** at the package version. Append/load/stream spans and metrics land in follow-up PRs (P-OTel-02+). For SQL-level traces, use `@opentelemetry/instrumentation-pg` in the application.
+To enable instrumentation, install `@opentelemetry/api` (optional peer), register an SDK in your app, and set:
+
+```typescript
+observability: { enabled: true }
+```
+
+You may also pass custom `tracer` / `meter` or `tracerProvider` / `meterProvider`. Scope name: **`es-dcb-library`** (package version). Append/load/stream spans and metrics arrive in P-OTel-02+. For SQL-level traces, use `@opentelemetry/instrumentation-pg` in the application.
 
 ---
 
