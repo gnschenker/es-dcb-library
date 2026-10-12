@@ -34,7 +34,7 @@ describe('HireTeacher', () => {
     const { teacherId } = await hireTeacher(store, systemClock, TEACHER);
     expect(teacherId).toBe(teacherIdFromEmail(TEACHER.email));
 
-    const teacherStream = queryItem({ types: ['TeacherHired'], tags: [`teacherId:${teacherId}`] });
+    const teacherStream = queryItem({ types: ['TeacherHired'], tags: [`teacher:${teacherId}`] });
     const { events } = await store.load(teacherStream);
     expect(events).toHaveLength(1);
     expect(events[0]?.type).toBe('TeacherHired');
@@ -142,11 +142,11 @@ describe('DismissTeacher', () => {
     // Dismiss while course is still in draft — should auto-remove teacher from course
     await dismissTeacher(store, systemClock, { teacherId, reason: 'cuts' });
 
-    const courseStream = queryItem({ types: ['TeacherRemovedFromCourse'], tags: [`courseId:${courseId}`] });
+    const courseStream = queryItem({ types: ['TeacherRemovedFromCourse'], tags: [`course:${courseId}`] });
     const { events: courseEvents } = await store.load(courseStream);
     expect(courseEvents.some(e => e.type === 'TeacherRemovedFromCourse')).toBe(true);
 
-    const teacherStream = queryItem({ types: ['TeacherDismissed'], tags: [`teacherId:${teacherId}`] });
+    const teacherStream = queryItem({ types: ['TeacherDismissed'], tags: [`teacher:${teacherId}`] });
     const { events: teacherEvents } = await store.load(teacherStream);
     expect(teacherEvents.some(e => e.type === 'TeacherDismissed')).toBe(true);
     await store.close();
