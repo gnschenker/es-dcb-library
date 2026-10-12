@@ -144,7 +144,7 @@ export async function enrollStudent(
   const [
     { events: studentEvents },
     { events: courseEvents },
-    { events: enrollmentEvents },
+    { events: enrollmentEvents, version: enrollmentVersion },
     { events: courseEnrollEvents, version: courseEnrollVersion },
   ] = await Promise.all([
     store.load(studentStream(input.studentId)),
@@ -203,7 +203,7 @@ export async function enrollStudent(
         ...enrollmentStream(input.studentId, input.courseId).items,
         ...courseEnrollmentStream(input.courseId).items,
       ]),
-      after: courseEnrollVersion,
+      after: enrollmentVersion > courseEnrollVersion ? enrollmentVersion : courseEnrollVersion,
     },
   );
 }

@@ -167,7 +167,7 @@ export async function cancelCourse(
         ...courseStream(input.courseId).items,
         ...courseEnrollmentStream(input.courseId).items,
       ]),
-      after: enrollmentVersion,
+      after: courseVersion > enrollmentVersion ? courseVersion : enrollmentVersion,
     },
   );
 }

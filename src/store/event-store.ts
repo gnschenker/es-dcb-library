@@ -2,7 +2,7 @@ import pg from 'pg';
 import type { Query } from '../query/types.js';
 import type { NewEvent, StoredEvent, LoadResult, AppendCondition, StreamOptions, EventStore, TagExtractor } from '../types.js';
 import { ConcurrencyError, EventStoreError } from '../errors.js';
-import { compileLoadQuery, compileExistsQuery, compileStreamQuery, extractLockPairs } from '../query/compiler.js';
+import { compileLoadQuery, compileExistsQuery, compileVersionCheckQuery, compileStreamQuery, extractLockPairs } from '../query/compiler.js';
 import { applySchema } from './schema.js';
 import { mapRow } from './row-mapper.js';
 
@@ -79,8 +79,14 @@ export class PostgresEventStore implements EventStore {
         const existsResult = await client.query<{ exists: boolean }>(existsSql, existsParams as unknown[]);
         
         if (existsResult.rows[0]!.exists) {
+          // Fetch actual max position for error reporting
+          const { sql: versionSql, params: versionParams } = compileVersionCheckQuery(
+            condition.failIfEventsMatch
+          );
+          const versionResult = await client.query<{ max_pos: string }>(versionSql, versionParams as unknown[]);
+          const actualVersion = BigInt(versionResult.rows[0]!.max_pos);
+          
           await client.query('ROLLBACK');
-          const actualVersion = condition.after ?? 0n;
           throw new ConcurrencyError(
             condition.after ?? 0n,
             actualVersion,
