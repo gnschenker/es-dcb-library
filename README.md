@@ -3,6 +3,9 @@
 A TypeScript event sourcing library implementing the **Dynamic Consistency Boundary (DCB)** pattern.
 
 [![CI](https://github.com/gnschenker/es-dcb-library/actions/workflows/ci.yml/badge.svg)](https://github.com/gnschenker/es-dcb-library/actions/workflows/ci.yml)
+[![npm version](https://img.shields.io/npm/v/es-dcb-library.svg)](https://www.npmjs.com/package/es-dcb-library)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Node](https://img.shields.io/node/v/es-dcb-library)](https://www.npmjs.com/package/es-dcb-library)
 
 ## What is DCB?
 
@@ -172,9 +175,10 @@ interface AppendCondition {
 
 ```typescript
 interface EventStore {
-  append(events: NewEvent | NewEvent[], condition?: AppendCondition): Promise<void>;
-  load<D = Record<string, unknown>>(query: Query): Promise<LoadResult<D>>;
-  stream<D = Record<string, unknown>>(query: Query, options?: StreamOptions): AsyncGenerator<StoredEvent<D>>;
+  append(events: NewEvent | NewEvent[], condition?: AppendCondition): Promise<StoredEvent[]>;
+  load(query: Query): Promise<LoadResult>;
+  stream(query: Query, options?: StreamOptions): AsyncIterable<StoredEvent>;
+  initializeSchema(): Promise<void>;
   close(): Promise<void>;
 }
 ```
@@ -364,7 +368,8 @@ CREATE TABLE events (
   data             JSONB        NOT NULL,
   metadata         JSONB,
   occurred_at      TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
-  tags             TEXT[]       NOT NULL
+  tags             TEXT[]       NOT NULL,
+  tx_id            xid8         NOT NULL DEFAULT pg_current_xact_id()
 );
 
 CREATE INDEX idx_events_tags_gin ON events USING GIN (tags array_ops);
@@ -443,7 +448,7 @@ npm run build  # Outputs ESM + CJS + .d.ts to dist/
 
 ## License
 
-MIT
+[MIT](LICENSE) © Gabriel Schenker
 
 ---
 

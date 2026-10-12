@@ -1,7 +1,25 @@
 {
   "name": "es-dcb-library",
-  "version": "0.1.0",
-  "description": "Event sourcing library with Dynamic Consistency Boundary (DCB) pattern",
+  "version": "1.0.0",
+  "description": "TypeScript event sourcing with Dynamic Consistency Boundaries (DCB) on PostgreSQL",
+  "license": "MIT",
+  "author": "Gabriel Schenker",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gnschenker/es-dcb-library.git"
+  },
+  "bugs": {
+    "url": "https://github.com/gnschenker/es-dcb-library/issues"
+  },
+  "homepage": "https://github.com/gnschenker/es-dcb-library#readme",
+  "keywords": [
+    "event-sourcing",
+    "dcb",
+    "dynamic-consistency-boundary",
+    "postgres",
+    "postgresql",
+    "event-store"
+  ],
   "type": "module",
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
@@ -29,25 +47,30 @@
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
   ],
   "engines": {
     "node": ">=18"
   },
   "scripts": {
     "build": "tsup",
+    "prepublishOnly": "npm run build",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:unit": "vitest run --project unit --passWithNoTests",
     "test:integration": "vitest run --project integration --passWithNoTests",
     "test:watch": "vitest"
   },
-  "dependencies": {
-    "pg": "^8.13.3"
+  "peerDependencies": {
+    "pg": ">=8.11.0"
   },
   "devDependencies": {
     "@types/node": "^22.13.4",
     "@types/pg": "^8.11.10",
+    "pg": "^8.13.3",
     "testcontainers": "^10.24.0",
     "tsup": "^8.3.6",
     "typescript": "^5.7.3",
