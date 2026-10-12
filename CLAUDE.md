@@ -128,7 +128,7 @@ Transaction order inside `append()` with options:
 - **Dedicated `pg.Client` for LISTEN** — pool connections lose LISTEN state when returned; `ManagedListenClient` holds one persistent `pg.Client` with exponential-backoff reconnect (1 s → 60 s cap)
 - **Shared LISTEN client started before loops** — gap-free guarantee: `initialize()` starts the client, then `start()` spawns loops; no notifications are missed during catch-up
 - **FOR EACH STATEMENT trigger** — one `pg_notify` per `store.append()` call regardless of batch size; prevents thundering herd
-- **NOTIFY payload is empty string** — receiver unconditionally drains from `state.lastPos`; no need to parse the payload
+- **NOTIFY payload is empty string** — receiver unconditionally drains from `state.lastCursor`; no need to parse the payload
 - **Atomic handler + checkpoint** — `BEGIN → handler → UPDATE projection_checkpoints → COMMIT`; crash before COMMIT replays the event; handlers must be idempotent (`INSERT … ON CONFLICT DO UPDATE`)
 - **dryRun mode** — handler called in real transaction, but always rolled back; use for SQL validation without side effects
 - **singleInstance** — `pg_try_advisory_lock(hashtext(name))` (session-level, not transaction-scoped) on a dedicated `pg.Client`; client held for the life of the loop; released on `stop()` / `lockClient.end()`. Contrast with `append()` which uses `pg_try_advisory_xact_lock` (transaction-scoped, auto-released on COMMIT/ROLLBACK).

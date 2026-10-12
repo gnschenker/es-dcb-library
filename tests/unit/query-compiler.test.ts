@@ -3,6 +3,7 @@ import {
   compileLoadQuery,
   compileVersionCheckQuery,
   compileStreamQuery,
+  compileCommittedStreamQuery,
   compileExistsQuery,
   extractLockPairs,
 } from '../../src/query/compiler.js';
@@ -84,6 +85,23 @@ describe('compileVersionCheckQuery()', () => {
     expect(sql).toContain('WHERE');
     expect(sql).not.toContain('ORDER BY');
     expect(params).toEqual([['EventA']]);
+  });
+});
+
+describe('compileCommittedStreamQuery()', () => {
+  it('filters committed rows and orders by (tx_id, global_position)', () => {
+    const q = queryAll();
+    const { sql, params } = compileCommittedStreamQuery(
+      q,
+      { txId: '100', globalPosition: 5n },
+      25,
+    );
+
+    expect(sql).toContain('tx_id < pg_snapshot_xmin(pg_current_snapshot())');
+    expect(sql).toContain('(tx_id, global_position) > ($1::xid8, $2)');
+    expect(sql).toContain('ORDER BY tx_id ASC, global_position ASC');
+    expect(sql).toContain('LIMIT $3');
+    expect(params).toEqual(['100', 5n, 25]);
   });
 });
 

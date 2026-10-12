@@ -334,23 +334,19 @@ await manager.start();
 ```
 
 **Key projection features:**
-- **Catch-up + live processing**: Each projection runs in a loop that first catches up from `lastPos`, then listens for live events via `LISTEN/NOTIFY`.
+- **Catch-up + live processing**: Each projection runs in a loop that first catches up from the `(tx_id, global_position)` checkpoint, then listens for live events via `LISTEN/NOTIFY`.
 - **Atomic handler + checkpoint**: Each event is processed in a transaction that includes both the handler logic and the checkpoint update. Handlers must be idempotent (`INSERT ... ON CONFLICT` or `UPDATE WHERE`).
 - **Isolation**: Each projection runs independently. A slow or errored projection does not block others.
 - **Gap-free guarantee**: The shared LISTEN client is started before any projection loop begins, ensuring no notifications are missed during catch-up.
-- **Safe position protection**: Projections use `useSafePosition: true` to prevent skipping events when transactions commit out of order. See [Safe Position Design](./.docs/safe-position-design.md) for details.
+- **Committed-only streaming**: Projections read only rows with `tx_id < pg_snapshot_xmin(pg_current_snapshot())`, ordered by `(tx_id, global_position)`, so they never skip events when transactions commit out of order. Sequence holes from rollbacks do not stall followers. See [Committed stream design](./.docs/committed-stream-design.md).
 
-### Projection Gap Safety
+### Projection gap safety
 
-PostgreSQL's `BIGSERIAL` assigns `global_position` before commit, so transaction T1 (position 100) might commit after T2 (position 101). Without protection, a projection reading up to position 101 would permanently skip position 100.
+PostgreSQL assigns `global_position` before commit, so T1 (position 100) may still be open while T2 (position 101) commits. A naive position-based stream would skip 100.
 
-**Solution**: Each event stores `tx_id` (`pg_current_xact_id()` at insert). Projections use `useSafePosition: true`, which computes the highest `global_position` with no lower position still in-flight (`tx_id >= pg_snapshot_xmin(pg_current_snapshot())`). See [`.docs/safe-position-design.md`](./.docs/safe-position-design.md).
+**Solution**: store `tx_id` on each event; followers use `committedOnly: true` and checkpoint `(last_tx_id, last_position)`. While any older transaction is active, its `tx_id` keeps `pg_snapshot_xmin` low enough that newer committed rows are withheld until it finishes.
 
-- **Performance**: Safe position queries are fast (~1ms) and do not require schema changes.
-- **Latency**: Projections may lag by 10-100ms during high write concurrency, which is acceptable for most use cases.
-- **No data loss**: Guaranteed event ordering with no gaps.
-
-For full design rationale, see [`.docs/safe-position-design.md`](./.docs/safe-position-design.md).
+See [`.docs/committed-stream-design.md`](./.docs/committed-stream-design.md) for rationale (including why gap-based “safe position” is not liveness-safe).
 
 See `.docs/projections-plan.md` for full design details.
 

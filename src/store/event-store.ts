@@ -3,10 +3,11 @@ import type { Query } from '../query/types.js';
 import type { NewEvent, StoredEvent, LoadResult, AppendCondition, StreamOptions, EventStore, TagExtractor } from '../types.js';
 import { UNTAGGED } from '../types.js';
 import { ConcurrencyError, EventStoreError, MissingTagExtractorError } from '../errors.js';
-import { compileLoadQuery, compileExistsQuery, compileVersionCheckQuery, compileStreamQuery, extractLockPairs } from '../query/compiler.js';
+import { compileLoadQuery, compileExistsQuery, compileVersionCheckQuery, compileStreamQuery, compileCommittedStreamQuery, extractLockPairs } from '../query/compiler.js';
 import { applySchema } from './schema.js';
 import { mapRow } from './row-mapper.js';
-import { computeSafePosition } from './safe-position.js';
+import { STREAM_CURSOR_ORIGIN } from '../types.js';
+import type { StreamCursor } from '../types.js';
 
 export interface EventStoreConfig {
   pool: pg.Pool;
@@ -133,7 +134,7 @@ export class PostgresEventStore implements EventStore {
 
         const sql = `INSERT INTO events (type, data, metadata, tags)
         VALUES ($1, $2::jsonb, $3::jsonb, $4)
-        RETURNING global_position, event_id, type, data, metadata, occurred_at, tags`.trim();
+        RETURNING global_position, event_id, type, data, metadata, occurred_at, tags, tx_id`.trim();
         const params = [event.type, event.data, event.metadata ?? null, finalTags];
         let result: pg.QueryResult;
         try {
@@ -160,28 +161,34 @@ export class PostgresEventStore implements EventStore {
 
   async *stream(query: Query, options: StreamOptions = {}): AsyncGenerator<StoredEvent> {
     const batchSize = options.batchSize ?? 100;
-    const useSafePosition = options.useSafePosition ?? false;
+
+    if (options.committedOnly) {
+      let cursor: StreamCursor = options.afterCursor ?? STREAM_CURSOR_ORIGIN;
+
+      while (true) {
+        const { sql, params } = compileCommittedStreamQuery(query, cursor, batchSize);
+        let result: pg.QueryResult;
+        try {
+          result = await this.pool.query(sql, params as unknown[]);
+        } catch (err) {
+          throw new EventStoreError(`Failed to stream events: ${String(err)}`, err);
+        }
+
+        for (const row of result.rows) {
+          const event = mapRow(row);
+          yield event;
+          cursor = { txId: event.txId, globalPosition: event.globalPosition };
+        }
+
+        if (result.rowCount === null || result.rowCount < batchSize) break;
+      }
+      return;
+    }
+
     let lastPosition = options.afterPosition ?? 0n;
 
     while (true) {
-      let maxPosition: bigint | undefined = undefined;
-      
-      if (useSafePosition) {
-        // Query safe position from a pool connection
-        const client = await this.pool.connect();
-        try {
-          maxPosition = await computeSafePosition(client);
-        } finally {
-          client.release();
-        }
-        
-        // If lastPosition >= maxPosition, no new safe events to read yet
-        if (lastPosition >= maxPosition) {
-          break;
-        }
-      }
-      
-      const { sql, params } = compileStreamQuery(query, lastPosition, batchSize, maxPosition);
+      const { sql, params } = compileStreamQuery(query, lastPosition, batchSize);
       let result: pg.QueryResult;
       try {
         result = await this.pool.query(sql, params as unknown[]);

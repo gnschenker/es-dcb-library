@@ -1,9 +1,13 @@
 import type { Query, QueryItem } from './types.js';
+import type { StreamCursor } from '../types.js';
 
 export interface CompiledQuery {
   sql: string;
   params: unknown[];
 }
+
+const EVENT_SELECT_COLUMNS =
+  'global_position, event_id, type, data, metadata, occurred_at, tags, tx_id';
 
 /**
  * Compiles a single QueryItem into a SQL WHERE fragment.
@@ -75,7 +79,7 @@ export function compileLoadQuery(query: Query): CompiledQuery {
   const whereClause = compileWhereClause(query, params, counter);
 
   const sql = [
-    'SELECT global_position, event_id, type, data, metadata, occurred_at, tags',
+    `SELECT ${EVENT_SELECT_COLUMNS}`,
     'FROM events',
     whereClause,
     'ORDER BY global_position ASC',
@@ -102,13 +106,12 @@ export function compileVersionCheckQuery(query: Query): CompiledQuery {
 }
 
 /**
- * Compiles a Query into a keyset-paginated SELECT query.
+ * Compiles a Query into a keyset-paginated SELECT query (global_position order).
  */
 export function compileStreamQuery(
   query: Query,
   afterPosition: bigint,
   batchSize: number,
-  maxPosition?: bigint,
 ): CompiledQuery {
   const params: unknown[] = [];
   const counter = { n: 0 };
@@ -118,23 +121,52 @@ export function compileStreamQuery(
   counter.n += 1;
   const afterRef = `$${counter.n}`;
 
-  let positionConstraint = `global_position > ${afterRef}`;
-  if (maxPosition !== undefined) {
-    params.push(maxPosition);
-    counter.n += 1;
-    const maxRef = `$${counter.n}`;
-    positionConstraint += ` AND global_position <= ${maxRef}`;
-  }
+  params.push(batchSize);
+  counter.n += 1;
+  const limitRef = `$${counter.n}`;
+
+  const sql = [
+    `SELECT ${EVENT_SELECT_COLUMNS}`,
+    'FROM events',
+    `${whereClause} AND global_position > ${afterRef}`,
+    'ORDER BY global_position ASC',
+    `LIMIT ${limitRef}`,
+  ].join('\n');
+
+  return { sql, params };
+}
+
+/**
+ * Committed-only stream: tx_id < snapshot xmin, ordered by (tx_id, global_position).
+ */
+export function compileCommittedStreamQuery(
+  query: Query,
+  afterCursor: StreamCursor,
+  batchSize: number,
+): CompiledQuery {
+  const params: unknown[] = [];
+  const counter = { n: 0 };
+  const whereClause = compileWhereClause(query, params, counter);
+
+  params.push(afterCursor.txId);
+  counter.n += 1;
+  const afterTxRef = `$${counter.n}`;
+
+  params.push(afterCursor.globalPosition);
+  counter.n += 1;
+  const afterPosRef = `$${counter.n}`;
 
   params.push(batchSize);
   counter.n += 1;
   const limitRef = `$${counter.n}`;
 
   const sql = [
-    'SELECT global_position, event_id, type, data, metadata, occurred_at, tags',
+    `SELECT ${EVENT_SELECT_COLUMNS}`,
     'FROM events',
-    `${whereClause} AND ${positionConstraint}`,
-    'ORDER BY global_position ASC',
+    `${whereClause}`,
+    `AND tx_id < pg_snapshot_xmin(pg_current_snapshot())`,
+    `AND (tx_id, global_position) > (${afterTxRef}::xid8, ${afterPosRef})`,
+    'ORDER BY tx_id ASC, global_position ASC',
     `LIMIT ${limitRef}`,
   ].join('\n');
 

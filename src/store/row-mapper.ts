@@ -8,6 +8,7 @@ export interface EventRow {
   metadata: Record<string, unknown> | null;
   occurred_at: Date;                    // pg auto-parses TIMESTAMPTZ
   tags: string[];                       // pg auto-parses TEXT[] arrays
+  tx_id: string;
 }
 
 export function mapRow(row: EventRow): StoredEvent {
@@ -19,5 +20,6 @@ export function mapRow(row: EventRow): StoredEvent {
     metadata: row.metadata,
     occurredAt: row.occurred_at,
     tags: row.tags,
+    txId: row.tx_id,
   };
 }
