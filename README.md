@@ -433,6 +433,20 @@ All design rationale and architecture decisions are in `.docs/`:
 
 ---
 
+## OpenTelemetry (optional, opt-in)
+
+By default the library does **not** use OpenTelemetry: omit `observability`, pass `{}`, or leave `enabled` unset/false — all use a local no-op and never load `@opentelemetry/api`.
+
+To enable instrumentation, install `@opentelemetry/api` (optional peer), register an SDK in your app, and set:
+
+```typescript
+observability: { enabled: true }
+```
+
+You may also pass custom `tracer` / `meter` or `tracerProvider` / `meterProvider`. Scope name: **`es-dcb-library`** (package version). Append/load/stream spans and metrics arrive in P-OTel-02+. For SQL-level traces, use `@opentelemetry/instrumentation-pg` in the application.
+
+---
+
 ## Development
 
 ```bash

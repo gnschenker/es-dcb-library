@@ -8,9 +8,16 @@ import { applySchema } from './schema.js';
 import { mapRow } from './row-mapper.js';
 import { STREAM_CURSOR_ORIGIN } from '../types.js';
 import type { StreamCursor } from '../types.js';
+import { createObservability, type DcbObservability } from '../observability/index.js';
+import type { ObservabilityConfig } from '../observability/index.js';
 
 export interface EventStoreConfig {
   pool: pg.Pool;
+  /**
+   * OpenTelemetry (opt-in). Instrumentation runs only when `observability.enabled === true`.
+   * Omitted or unset `enabled` → no-op without loading `@opentelemetry/api`.
+   */
+  observability?: ObservabilityConfig;
   /**
    * Tag extractors per event type.
    * Called for each event to derive tags from the event data.
@@ -29,10 +36,13 @@ export interface EventStoreConfig {
 export class PostgresEventStore implements EventStore {
   private readonly pool: pg.Pool;
   private readonly tagExtractors: Record<string, TagExtractor | typeof UNTAGGED>;
+  /** Reserved for append/load/stream instrumentation (P-OTel-02+). */
+  private readonly observability: DcbObservability;
 
   constructor(config: EventStoreConfig) {
     this.pool = config.pool;
     this.tagExtractors = config.tagExtractors ?? {};
+    this.observability = createObservability(config.observability);
   }
 
   async initializeSchema(): Promise<void> {
