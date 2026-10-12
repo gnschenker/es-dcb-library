@@ -337,10 +337,10 @@ describe('enrollStudent command', () => {
   it('appends StudentEnrolled on success', async () => {
     const store = makeMockStore({
       load: vi.fn()
-        .mockResolvedValueOnce({ events: registeredStudentEvents, version: 1n })
-        .mockResolvedValueOnce({ events: openCourseEvents, version: 2n })
-        .mockResolvedValueOnce({ events: [], version: 0n })
-        .mockResolvedValueOnce({ events: [], version: 0n }),
+        .mockResolvedValueOnce({ 
+          events: [...registeredStudentEvents, ...openCourseEvents], 
+          version: 2n 
+        }),
     });
     await enrollStudent(store, systemClock, { studentId: 's1', courseId: 'c1' });
     expect(store.append).toHaveBeenCalledOnce();
@@ -351,10 +351,7 @@ describe('enrollStudent command', () => {
   it('throws StudentNotFoundError when student not registered', async () => {
     const store = makeMockStore({
       load: vi.fn()
-        .mockResolvedValueOnce({ events: [], version: 0n })
-        .mockResolvedValueOnce({ events: openCourseEvents, version: 2n })
-        .mockResolvedValueOnce({ events: [], version: 0n })
-        .mockResolvedValueOnce({ events: [], version: 0n }),
+        .mockResolvedValueOnce({ events: openCourseEvents, version: 2n }),
     });
     await expect(enrollStudent(store, systemClock, { studentId: 's1', courseId: 'c1' }))
       .rejects.toThrow(StudentNotFoundError);
@@ -363,10 +360,7 @@ describe('enrollStudent command', () => {
   it('throws CourseNotFoundError when course does not exist', async () => {
     const store = makeMockStore({
       load: vi.fn()
-        .mockResolvedValueOnce({ events: registeredStudentEvents, version: 1n })
-        .mockResolvedValueOnce({ events: [], version: 0n })
-        .mockResolvedValueOnce({ events: [], version: 0n })
-        .mockResolvedValueOnce({ events: [], version: 0n }),
+        .mockResolvedValueOnce({ events: registeredStudentEvents, version: 1n }),
     });
     await expect(enrollStudent(store, systemClock, { studentId: 's1', courseId: 'nonexistent' }))
       .rejects.toThrow(CourseNotFoundError);
@@ -376,10 +370,7 @@ describe('enrollStudent command', () => {
     const draftCourse = [makeEvent('CourseCreated', { courseId: 'c1', title: 'Intro', semester: 'F24', creditHours: 3, maxStudents: 30, prerequisites: [], passingGrade: 60, dropDeadline: '2030-09-15', withdrawalDeadline: '2030-10-15' })];
     const store = makeMockStore({
       load: vi.fn()
-        .mockResolvedValueOnce({ events: registeredStudentEvents, version: 1n })
-        .mockResolvedValueOnce({ events: draftCourse, version: 1n })
-        .mockResolvedValueOnce({ events: [], version: 0n })
-        .mockResolvedValueOnce({ events: [], version: 0n }),
+        .mockResolvedValueOnce({ events: [...registeredStudentEvents, ...draftCourse], version: 1n }),
     });
     await expect(enrollStudent(store, systemClock, { studentId: 's1', courseId: 'c1' }))
       .rejects.toThrow(CourseNotOpenError);
@@ -389,10 +380,7 @@ describe('enrollStudent command', () => {
     const enrolledEvents = [makeEvent('StudentEnrolled', { studentId: 's1', courseId: 'c1', enrolledAt: '2024-01-01T00:00:00Z' })];
     const store = makeMockStore({
       load: vi.fn()
-        .mockResolvedValueOnce({ events: registeredStudentEvents, version: 1n })
-        .mockResolvedValueOnce({ events: openCourseEvents, version: 2n })
-        .mockResolvedValueOnce({ events: enrolledEvents, version: 1n })
-        .mockResolvedValueOnce({ events: enrolledEvents, version: 1n }),
+        .mockResolvedValueOnce({ events: [...registeredStudentEvents, ...openCourseEvents, ...enrolledEvents], version: 2n }),
     });
     await expect(enrollStudent(store, systemClock, { studentId: 's1', courseId: 'c1' }))
       .rejects.toThrow(StudentAlreadyEnrolledError);
@@ -406,10 +394,7 @@ describe('enrollStudent command', () => {
     const existingEnrollment = [makeEvent('StudentEnrolled', { studentId: 's2', courseId: 'c1', enrolledAt: '2024-01-01T00:00:00Z' })];
     const store = makeMockStore({
       load: vi.fn()
-        .mockResolvedValueOnce({ events: registeredStudentEvents, version: 1n })
-        .mockResolvedValueOnce({ events: fullCourseEvents, version: 2n })
-        .mockResolvedValueOnce({ events: [], version: 0n })
-        .mockResolvedValueOnce({ events: existingEnrollment, version: 1n }),
+        .mockResolvedValueOnce({ events: [...registeredStudentEvents, ...fullCourseEvents, ...existingEnrollment], version: 2n }),
     });
     await expect(enrollStudent(store, systemClock, { studentId: 's1', courseId: 'c1' }))
       .rejects.toThrow(EnrollmentFullError);
@@ -422,10 +407,7 @@ describe('enrollStudent command', () => {
     ];
     const store = makeMockStore({
       load: vi.fn()
-        .mockResolvedValueOnce({ events: registeredStudentEvents, version: 1n })
-        .mockResolvedValueOnce({ events: prereqCourse, version: 2n })
-        .mockResolvedValueOnce({ events: [], version: 0n })
-        .mockResolvedValueOnce({ events: [], version: 0n }),
+        .mockResolvedValueOnce({ events: [...registeredStudentEvents, ...prereqCourse], version: 2n }),
     });
     await expect(enrollStudent(store, systemClock, { studentId: 's1', courseId: 'c1' }))
       .rejects.toThrow(PrerequisiteNotSatisfiedError);
