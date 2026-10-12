@@ -1,12 +1,14 @@
 # es-dcb-library
 
-A TypeScript event sourcing library implementing the **Dynamic Consistency Boundary (DCB)** pattern.
-
-[![CI](https://github.com/gnschenker/es-dcb-library/actions/workflows/ci.yml/badge.svg)](https://github.com/gnschenker/es-dcb-library/actions/workflows/ci.yml)
+[![CI](https://github.com/gnschenker/es-dcb-library/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/gnschenker/es-dcb-library/actions/workflows/ci.yml)
+[![Release](https://github.com/gnschenker/es-dcb-library/actions/workflows/release.yml/badge.svg)](https://github.com/gnschenker/es-dcb-library/actions/workflows/release.yml)
 [![npm version](https://img.shields.io/npm/v/es-dcb-library.svg)](https://www.npmjs.com/package/es-dcb-library)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Node](https://img.shields.io/node/v/es-dcb-library)](https://www.npmjs.com/package/es-dcb-library)
+[![npm downloads](https://img.shields.io/badge/npm%20downloads-0%2Fmonth-CB3837?logo=npm&logoColor=white)](https://www.npmjs.com/package/es-dcb-library)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://github.com/gnschenker/es-dcb-library/blob/main/LICENSE)
+[![Node.js](https://img.shields.io/badge/Node.js-%3E%3D18-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-13%2B-336791?logo=postgresql&logoColor=white)](https://www.postgresql.org/)
+
+A TypeScript event sourcing library implementing the **Dynamic Consistency Boundary (DCB)** pattern.
 
 ## What is DCB?
 
