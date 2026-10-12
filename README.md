@@ -1,764 +1,357 @@
 # es-dcb-library
 
-A TypeScript event sourcing library implementing the **Dynamic Consistency Boundary (DCB)** pattern. Instead of traditional aggregates with fixed, pre-defined boundaries, context is defined dynamically at query time using a fluent DSL. The store is backed by PostgreSQL.
+A TypeScript event sourcing library implementing the **Dynamic Consistency Boundary (DCB)** pattern.
 
----
+[![CI](https://github.com/gnschenker/es-dcb-library/actions/workflows/ci.yml/badge.svg)](https://github.com/gnschenker/es-dcb-library/actions/workflows/ci.yml)
 
 ## What is DCB?
 
-In classical event sourcing, an aggregate is a fixed stream of events identified by a single ID (e.g. `orderId`). The aggregate boundary is defined at design time and cannot change.
+Dynamic Consistency Boundary is an event sourcing architecture that eliminates aggregates and fixed stream boundaries. Instead, consistency contexts are defined dynamically at runtime through **queries over event types and tags**.
 
-**Dynamic Consistency Boundary** removes this constraint. A context is defined by a *query* — a set of event types and payload filters evaluated at runtime. The same event may belong to multiple overlapping contexts simultaneously, and the context for any given decision can be composed ad hoc.
+See the [DCB specification](https://dcb.events) for the full design.
 
-```
-Traditional:   load("order", orderId)  →  fixed stream for one aggregate
-DCB:           load(query.eventsOfType('OrderCreated')
-                         .where.key('orderId').equals('o1')
-                         .eventsOfType('OrderShipped')
-                         .where.key('orderId').equals('o1'))
-               →  all events relevant to this decision, from any type
-```
+## Key Features
 
-This makes it straightforward to handle decisions that cross what would traditionally be aggregate boundaries, without coupling aggregates together or introducing sagas for read-side consistency.
-
----
-
-## Features
-
-- **Fluent, immutable query DSL** — builds type-safe queries with no `.build()` call needed
-- **Transactional append** with optimistic concurrency detection via PostgreSQL advisory locks
-- **Keyset-pagination streaming** — `AsyncIterable<StoredEvent>` with no server-side cursors or long-lived transactions
-- **Single PostgreSQL table** — simple schema, easy to inspect and migrate
-- **Dual ESM + CJS output** — works in both `import` and `require` environments
-- **No ORM** — raw parameterized SQL, full control over query shapes and indexes
-- **Projections addon** — asynchronous read-model materialisation with LISTEN/NOTIFY and automatic catch-up
-
----
-
-## Requirements
-
-- Node.js >= 18
-- PostgreSQL >= 15
-- Docker (for integration tests only)
+- **No aggregates** — consistency boundaries are constructed ad-hoc per command
+- **Tag-based queries** — events carry tags; queries select events by type and tag combinations
+- **PostgreSQL-backed** — uses advisory locks for concurrency control, GIN indexes for tag queries
+- **Type-safe** — full TypeScript support with generics for event data
+- **Streaming** — memory-efficient keyset pagination (no cursors, no long transactions)
+- **Projections addon** — separate `es-dcb-library/projections` subpath export for read models
 
 ---
 
 ## Installation
 
 ```bash
-npm install es-dcb-library
+npm install es-dcb-library pg
 ```
-
----
 
 ## Quick Start
 
+### 1. Define your events
+
 ```typescript
-import { PostgresEventStore, query, ConcurrencyError } from 'es-dcb-library';
+// events.ts
+export interface OrderCreated {
+  orderId: string;
+  customerId: string;
+  items: { sku: string; qty: number }[];
+}
+
+export interface OrderShipped {
+  orderId: string;
+  shippedAt: string;
+}
+```
+
+### 2. Create the event store
+
+```typescript
 import pg from 'pg';
+import { PostgresEventStore, applySchema } from 'es-dcb-library';
 
-// 1. Create a connection pool
-const pool = new pg.Pool({ connectionString: 'postgres://user:pass@localhost:5432/mydb' });
+const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
+const client = await pool.connect();
+await applySchema(client);
+client.release();
 
-// 2. Create the store
-const store = new PostgresEventStore({ pool });
-
-// 3. Create the table and indexes (safe to call repeatedly — idempotent)
-await store.initializeSchema();
-
-// 4. Append events
-const [stored] = await store.append({
-  type: 'OrderCreated',
-  payload: { orderId: 'o1', customerId: 'c1', total: 99.99 },
-  metadata: { correlationId: 'req-123' },
-});
-
-console.log(stored.globalPosition); // 1n (BigInt)
-console.log(stored.eventId);        // UUID string
-
-// 5. Load events
-const q = query.eventsOfType('OrderCreated').where.key('orderId').equals('o1');
-const { events, version } = await store.load(q);
-
-// 6. Append with optimistic concurrency check
-try {
-  await store.append(
-    { type: 'OrderShipped', payload: { orderId: 'o1' } },
-    { query: q, expectedVersion: version },
-  );
-} catch (err) {
-  if (err instanceof ConcurrencyError) {
-    console.log(`Stale version: expected ${err.expectedVersion}, got ${err.actualVersion}`);
-    // Re-read and retry
-  }
-}
-
-// 7. Stream events
-for await (const event of store.stream(q)) {
-  console.log(event.type, event.payload);
-}
-
-// 8. Close the pool when done
-await store.close();
-```
-
----
-
-## API
-
-### `query`
-
-The entry point for building queries. All builder methods are **immutable** — every call returns a new instance.
-
-```typescript
-import { query } from 'es-dcb-library';
-
-// Single type, no filter
-query.eventsOfType('OrderCreated')
-query.allEventsOfType('OrderCreated')  // readable alias, identical behaviour
-
-// Single type with payload filter
-query.eventsOfType('OrderCreated')
-  .where.key('customerId').equals('c1')
-
-// AND filter — both conditions must match
-query.eventsOfType('OrderCreated')
-  .where.key('customerId').equals('c1')
-  .and.key('region').equals('EU')
-
-// OR filter — either condition matches
-query.eventsOfType('OrderCreated')
-  .where.key('status').equals('pending')
-  .or.key('status').equals('active')
-
-// Multi-type — returns events of both types in global_position order
-query.eventsOfType('OrderCreated').where.key('orderId').equals('o1')
-     .eventsOfType('OrderShipped').where.key('orderId').equals('o1')
-```
-
-`.where`, `.and`, and `.or` are **property getters** (not method calls) — they do not use `()`.
-
----
-
-### `PostgresEventStore`
-
-```typescript
-const store = new PostgresEventStore({ pool: pg.Pool });
-```
-
-#### `initializeSchema(): Promise<void>`
-
-Creates the `events` table and all required indexes. Safe to call on startup — uses `IF NOT EXISTS` throughout.
-
-#### `load(query: QueryDefinition): Promise<LoadResult>`
-
-Returns all matching events in ascending `global_position` order.
-
-```typescript
-interface LoadResult {
-  events: StoredEvent[];
-  version: bigint;  // MAX(global_position) of matched events, or 0n if none
-}
-```
-
-`version` is designed to be passed directly as `expectedVersion` in the next `append` call.
-
-#### `append(events, options?): Promise<StoredEvent[]>`
-
-Appends one or more events in a single transaction. All events either commit or roll back together.
-
-```typescript
-// Without concurrency check
-await store.append({ type: 'X', payload: { ... } });
-await store.append([event1, event2, event3]);
-
-// With optimistic concurrency check
-const { version } = await store.load(q);
-await store.append(newEvent, {
-  query: q,               // scope of the conflict check
-  expectedVersion: version,
-  concurrencyQuery: q2,   // optional: use a different scope for the check only
+const store = new PostgresEventStore({
+  pool,
+  tagExtractors: {
+    OrderCreated: (event) => [`order:${event.data.orderId}`, `customer:${event.data.customerId}`],
+    OrderShipped: (event) => [`order:${event.data.orderId}`],
+  },
 });
 ```
 
-Throws `ConcurrencyError` if:
-- `expectedVersion` does not match the current `MAX(global_position)` for the query scope
-- The advisory lock for the stream is held by a concurrent writer (transient — retry is appropriate)
+Tag extractors are functions that derive tags from event data. Tags are merged with any explicitly provided tags on append.
 
-#### `stream(query, options?): AsyncIterable<StoredEvent>`
-
-Streams events using keyset pagination. Each page is a short independent query — no long-lived transactions.
+### 3. Append events
 
 ```typescript
-interface StreamOptions {
-  batchSize?: number;      // rows per page (default: 100)
-  afterPosition?: bigint;  // start after this global_position (default: 0n)
-}
+import { queryItem } from 'es-dcb-library';
 
-for await (const event of store.stream(q, { batchSize: 500 })) {
-  await process(event);
-}
-```
+const orderId = 'order-123';
 
-Safe to `break` early — no connections are held between pages.
+await store.append([
+  {
+    type: 'OrderCreated',
+    data: { orderId, customerId: 'c1', items: [{ sku: 'widget', qty: 2 }] },
+  },
+]);
 
-#### `close(): Promise<void>`
+// Later: append with optimistic concurrency check
+const orderQuery = queryItem({ types: ['OrderCreated', 'OrderShipped'], tags: [`order:${orderId}`] });
+const { version } = await store.load(orderQuery);
 
-Drains and closes the connection pool. Call once on application shutdown.
-
----
-
-### Types
-
-```typescript
-interface NewEvent<P = Record<string, unknown>> {
-  type: string;
-  payload: P;
-  metadata?: Record<string, unknown>;
-  tags?: string[];  // Optional event tags
-}
-
-interface StoredEvent<P = Record<string, unknown>> {
-  globalPosition: bigint;   // BIGSERIAL cast to BigInt — safe above 2^53
-  eventId: string;          // UUID, generated by PostgreSQL
-  type: string;
-  payload: P;
-  metadata: Record<string, unknown> | null;
-  occurredAt: Date;
-  tags: string[];           // Event tags
-}
-```
-
-`globalPosition` is always a `bigint`, never a `number`. This avoids precision loss for large stores.
-
-#### Tags
-
-Events can be tagged with arbitrary strings to support flexible partitioning and filtering. Tags are stored as a PostgreSQL `TEXT[]` array and indexed with a GIN index for fast containment queries.
-
-```typescript
-// Append events with tags
-await store.append({
-  type: 'OrderCreated',
-  payload: { orderId: 'o1', customerId: 'c1' },
-  tags: ['order:o1', 'customer:c1'],
-});
-
-// Tags are returned on read
-const { events } = await store.load(someQuery);
-console.log(events[0].tags); // ['order:o1', 'customer:c1']
-```
-
-**Tag Extractor**: You can provide a `tagExtractor` function in `AppendOptions` to derive tags automatically from event payloads. This is useful for applying consistent tagging logic without modifying every call site.
-
-```typescript
-function extractTags(event: NewEvent): string[] {
-  const tags: string[] = [];
-  if (event.type === 'OrderCreated') {
-    tags.push(`order:${event.payload['orderId']}`);
-    tags.push(`customer:${event.payload['customerId']}`);
-  }
-  // ... more logic for other event types
-  return tags;
-}
-
-// Extractor output is merged with event.tags (if present)
 await store.append(
-  { type: 'OrderCreated', payload: { orderId: 'o1', customerId: 'c1' } },
-  { query: q, expectedVersion: version, tagExtractor: extractTags }
+  [{ type: 'OrderShipped', data: { orderId, shippedAt: new Date().toISOString() } }],
+  { failIfEventsMatch: orderQuery, after: version }
 );
 ```
 
-Tags specified in the event and tags returned by the extractor are merged and deduplicated before insertion.
+**Concurrency control:**  
+The `failIfEventsMatch` condition checks whether any events matching the query exist after the specified `after` position. If they do, a `ConcurrencyError` is thrown. PostgreSQL advisory locks (acquired in sorted order by `(type, tag)` pairs) serialize concurrent writers, so `ConcurrencyError` indicates a true optimistic concurrency conflict, not lock contention.
 
-**Note**: The current query DSL (`query.eventsOfType().where.key()...`) filters on payload, not tags. Tag-based query support is coming in a future release aligned with the DCB specification.
+### 4. Query events
+
+```typescript
+import { query, queryItem } from 'es-dcb-library';
+
+// Single query item
+const orderEvents = await store.load(queryItem({ tags: [`order:${orderId}`] }));
+
+// Multiple query items (OR semantics)
+const multiQuery = query([
+  { types: ['OrderCreated'], tags: [`customer:c1`] },
+  { types: ['OrderShipped'], tags: [`order:${orderId}`] },
+]);
+const result = await store.load(multiQuery);
+
+console.log(result.events);    // StoredEvent[]
+console.log(result.version);   // bigint (max global_position)
+```
+
+**Query semantics:**
+- A `Query` is an array of `QueryItem`s, combined with OR logic.
+- Within a single `QueryItem`:
+  - `types?: string[]` — matches events of these types (empty or omitted = any type)
+  - `tags?: string[]` — matches events having **all** these tags (empty or omitted = any tags)
+
+### 5. Stream large result sets
+
+```typescript
+for await (const event of store.stream(queryItem({ tags: [`customer:c1`] }), { batchSize: 100 })) {
+  console.log(event.type, event.globalPosition);
+}
+```
+
+Streaming uses keyset pagination (`WHERE global_position > $last LIMIT $batchSize`). No server-side cursors, no long transactions.
 
 ---
 
-### Errors
+## API Reference
+
+### Core Types
 
 ```typescript
-import { ConcurrencyError, EventStoreError } from 'es-dcb-library';
-
-// Thrown when expectedVersion !== actual MAX(global_position)
-// or when the advisory lock is held by a concurrent writer
-class ConcurrencyError extends Error {
-  expectedVersion: bigint;
-  actualVersion: bigint;
+interface NewEvent<D = Record<string, unknown>> {
+  type: string;
+  data: D;
+  metadata?: Record<string, unknown>;
+  tags?: string[];  // merged with tagExtractor output
 }
 
-// Wraps unexpected database errors
-class EventStoreError extends Error {
-  cause?: unknown;
+interface StoredEvent<D = Record<string, unknown>> {
+  globalPosition: bigint;
+  eventId: string;
+  type: string;
+  data: D;
+  metadata: Record<string, unknown> | null;
+  occurredAt: Date;
+  tags: string[];
 }
+
+interface QueryItem {
+  types?: readonly string[];  // OR within types, empty = all types
+  tags?: readonly string[];   // AND across tags, empty = all tags
+}
+
+interface Query {
+  items: readonly QueryItem[];  // OR across items
+}
+
+interface AppendCondition {
+  failIfEventsMatch: Query;
+  after?: bigint;  // fail if any matching event exists after this position
+}
+```
+
+### EventStore Interface
+
+```typescript
+interface EventStore {
+  append(events: NewEvent | NewEvent[], condition?: AppendCondition): Promise<void>;
+  load<D = Record<string, unknown>>(query: Query): Promise<LoadResult<D>>;
+  stream<D = Record<string, unknown>>(query: Query, options?: StreamOptions): AsyncGenerator<StoredEvent<D>>;
+  close(): Promise<void>;
+}
+```
+
+### Query Builders
+
+```typescript
+import { query, queryItem } from 'es-dcb-library';
+
+// Single item
+const q1 = queryItem({ types: ['OrderCreated'], tags: ['order:o1'] });
+
+// Multiple items
+const q2 = query([
+  { types: ['OrderCreated'], tags: ['customer:c1'] },
+  { types: ['OrderShipped'], tags: ['order:o1'] },
+]);
+```
+
+### Tag Extractors
+
+```typescript
+import { PostgresEventStore, TagExtractor } from 'es-dcb-library';
+
+const tagExtractors: Record<string, TagExtractor> = {
+  OrderCreated: (event) => [
+    `order:${event.data.orderId}`,
+    `customer:${event.data.customerId}`,
+  ],
+  OrderShipped: (event) => [`order:${event.data.orderId}`],
+};
+
+const store = new PostgresEventStore({ pool, tagExtractors });
 ```
 
 ---
 
-## Concurrency Model
+## Projections (Read Models)
 
-`append()` with `AppendOptions` uses **PostgreSQL advisory locks** to serialise concurrent writers on the same logical stream. This is safer than a bare `SELECT MAX ... INSERT` sequence under `READ COMMITTED`, which has a lost-update race condition when two writers read the same version concurrently.
-
-The lock key is derived from a canonical (deterministic, sorted) representation of the query, hashed with PostgreSQL's built-in `hashtext()`. The lock is transaction-scoped — released automatically on `COMMIT` or `ROLLBACK`. Unrelated streams are never blocked.
-
-```
-Writer A: lock(stream-key) ✓ → version check → insert → COMMIT → release
-Writer B: lock(stream-key) ✗ → ConcurrencyError (retry with fresh load)
-```
-
-The `concurrencyQuery` option lets you decouple the load scope from the conflict-detection scope. For example, load a broad customer history but only detect conflicts on a specific order type:
+The library includes a projections addon for building read models. Import from the `projections` subpath:
 
 ```typescript
-const broadQuery  = query.eventsOfType('OrderCreated').eventsOfType('OrderUpdated')
-                         .where.key('customerId').equals('c1');
-const narrowQuery = query.eventsOfType('OrderCreated').where.key('orderId').equals('o1');
+import { defineProjection, createEventDispatcher, ProjectionManager } from 'es-dcb-library/projections';
+import { queryItem } from 'es-dcb-library';
 
-const { events, version } = await store.load(broadQuery);
-// ...
-await store.append(newEvent, {
-  query: broadQuery,
-  expectedVersion: version,
-  concurrencyQuery: narrowQuery,  // only conflict-check against order-specific events
+const ordersProjection = defineProjection({
+  name: 'orders-read-model',
+  
+  query: queryItem({ types: ['OrderCreated', 'OrderShipped'] }),
+  
+  async setup(client) {
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS read_orders (
+        order_id TEXT PRIMARY KEY,
+        status TEXT NOT NULL,
+        shipped_at TIMESTAMPTZ
+      )
+    `);
+  },
+  
+  handler: createEventDispatcher({
+    OrderCreated: async (data, _event, client) => {
+      await client.query(
+        `INSERT INTO read_orders (order_id, status) VALUES ($1, 'created')
+         ON CONFLICT (order_id) DO NOTHING`,
+        [data.orderId]
+      );
+    },
+    OrderShipped: async (data, _event, client) => {
+      await client.query(
+        `UPDATE read_orders SET status = 'shipped', shipped_at = $1 WHERE order_id = $2`,
+        [data.shippedAt, data.orderId]
+      );
+    },
+  }),
 });
+
+const manager = new ProjectionManager(store, pool, [ordersProjection]);
+await manager.initialize();
+await manager.start();
 ```
+
+**Key projection features:**
+- **Catch-up + live processing**: Each projection runs in a loop that first catches up from `lastPos`, then listens for live events via `LISTEN/NOTIFY`.
+- **Atomic handler + checkpoint**: Each event is processed in a transaction that includes both the handler logic and the checkpoint update. Handlers must be idempotent (`INSERT ... ON CONFLICT` or `UPDATE WHERE`).
+- **Isolation**: Each projection runs independently. A slow or errored projection does not block others.
+- **Gap-free guarantee**: The shared LISTEN client is started before any projection loop begins, ensuring no notifications are missed during catch-up.
+
+See `.docs/projections-plan.md` for full design details.
 
 ---
 
-## Database Schema
+## Schema
 
-A single `events` table is created by `initializeSchema()`:
+The library manages a single `events` table:
 
 ```sql
 CREATE TABLE events (
   global_position  BIGSERIAL    PRIMARY KEY,
   event_id         UUID         NOT NULL DEFAULT gen_random_uuid() UNIQUE,
   type             VARCHAR(255) NOT NULL,
-  payload          JSONB        NOT NULL,
+  data             JSONB        NOT NULL,
   metadata         JSONB,
-  occurred_at      TIMESTAMPTZ  NOT NULL DEFAULT NOW()
-);
-```
-
-Indexes created automatically:
-
-| Index | Type | Purpose |
-|-------|------|---------|
-| `idx_events_type_position` | B-tree `(type, global_position)` | Type filter + ordered range queries |
-| `idx_events_payload_gin` | GIN `(payload jsonb_path_ops)` | Payload containment (`@>`) queries |
-| `idx_events_occurred_at_brin` | BRIN `(occurred_at)` | Time-bounded queries (tiny, near-zero write cost) |
-
-Autovacuum thresholds are tightened at schema-init time (`scale_factor=0.01`) so dead tuples from rolled-back appends are reclaimed promptly.
-
----
-
-## Projections
-
-The projections addon (`es-dcb-library/projections`) materialises pre-computed read models into PostgreSQL tables and keeps them up to date asynchronously as new events are appended.
-
-### Why projections?
-
-Command handlers always need a fresh, consistent view of state — they replay events on every call. Read endpoints don't: eventual consistency is acceptable and replaying hundreds of events per HTTP request is wasteful. Projections solve this:
-
-```
-Without projections — GET /courses/:id/enrollments with N students:
-  store.load(courseStream)                    1 query
-  store.load(enrollmentStream) × N students   N queries
-                                              = N+2 queries per request
-
-With projections:
-  readPool.query('SELECT * FROM read_enrollments WHERE course_id = $1')
-                                              = 1 indexed SELECT
-```
-
-### Quick start
-
-```typescript
-import { PostgresEventStore, query } from 'es-dcb-library';
-import {
-  defineProjection,
-  createEventDispatcher,
-  ProjectionManager,
-} from 'es-dcb-library/projections';
-import pg from 'pg';
-
-// 1. Define a projection
-const teachersProjection = defineProjection({
-  name: 'teachers-read-model',
-
-  query: query.eventsOfType('TeacherHired').eventsOfType('TeacherDismissed'),
-
-  async setup(client) {
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS read_teachers (
-        teacher_id   TEXT PRIMARY KEY,
-        name         TEXT NOT NULL,
-        status       TEXT NOT NULL
-      )
-    `);
-  },
-
-  handler: createEventDispatcher({
-    TeacherHired: async (payload, _event, client) => {
-      await client.query(
-        `INSERT INTO read_teachers (teacher_id, name, status)
-         VALUES ($1, $2, 'hired')
-         ON CONFLICT (teacher_id) DO UPDATE SET name = $2, status = 'hired'`,
-        [payload['teacherId'], payload['name']],
-      );
-    },
-    TeacherDismissed: async (payload, _event, client) => {
-      await client.query(
-        `UPDATE read_teachers SET status = 'dismissed' WHERE teacher_id = $1`,
-        [payload['teacherId']],
-      );
-    },
-  }),
-});
-
-// 2. Wire up the manager
-const pool  = new pg.Pool({ connectionString: process.env.DATABASE_URL });
-const store = new PostgresEventStore({ pool });
-
-await store.initializeSchema();
-
-const manager = new ProjectionManager({
-  pool,
-  store,
-  projections: [teachersProjection],
-});
-
-await manager.initialize();  // DDL + setup() + checkpoints
-manager.start();             // background loops — returns immediately
-await manager.waitUntilLive(); // optional: wait for catch-up to complete
-
-// 3. Read from the materialised table — O(1) indexed SELECT
-const { rows } = await pool.query(
-  'SELECT * FROM read_teachers WHERE teacher_id = $1',
-  [teacherId],
+  occurred_at      TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+  tags             TEXT[]       NOT NULL
 );
 
-// 4. Shut down gracefully
-await manager.stop();
-await store.close();
-await pool.end();
+CREATE INDEX idx_events_tags_gin ON events USING GIN (tags array_ops);
+CREATE INDEX idx_events_type_position ON events (type, global_position);
+CREATE INDEX idx_events_occurred_at_brin ON events USING BRIN (occurred_at);
 ```
 
-### `defineProjection(def)`
+Call `applySchema(client)` to create the table and indexes.
 
-Validates and returns a `ProjectionDefinition`. Throws if `name` is empty, does not match `/^[a-zA-Z][a-zA-Z0-9\-_]{0,127}$/`, or if `query` has no clauses.
+### Autovacuum tuning
 
-```typescript
-/** Called once per matching event inside an open transaction. */
-type ProjectionHandler = (event: StoredEvent, client: pg.PoolClient) => Promise<void>;
-
-/** Called once during initialize(). Must use IF NOT EXISTS / idempotent DDL. */
-type ProjectionSetup = (client: pg.PoolClient) => Promise<void>;
-
-interface ProjectionDefinition {
-  /** Stable unique key — stored in projection_checkpoints. */
-  readonly name: string;
-
-  /** Which events drive this projection. Uses the standard query DSL. */
-  readonly query: QueryDefinition;
-
-  /**
-   * Optional: run idempotent DDL (CREATE TABLE IF NOT EXISTS).
-   * Called once during manager.initialize(). Must not begin/commit transactions.
-   */
-  readonly setup?: ProjectionSetup;
-
-  /**
-   * Called once per matching event inside an open transaction.
-   * The checkpoint update is committed in the same transaction — atomically.
-   * Must NOT call BEGIN, COMMIT, or ROLLBACK.
-   * Must be idempotent — at-least-once delivery is guaranteed.
-   */
-  readonly handler: ProjectionHandler;
-}
-
-/** Map of event type → typed handler. Used with createEventDispatcher(). */
-type DispatchHandlers = {
-  [eventType: string]: (
-    payload: Record<string, unknown>,
-    event: StoredEvent,
-    client: pg.PoolClient,
-  ) => Promise<void>;
-};
-```
-
-### `createEventDispatcher(handlers)`
-
-Convenience factory that builds a `ProjectionHandler` dispatching by `event.type`. Events with no matching handler are silently skipped.
-
-```typescript
-handler: createEventDispatcher({
-  TeacherHired: async (payload, event, client) => { /* ... */ },
-  TeacherDismissed: async (payload, event, client) => { /* ... */ },
-})
-```
-
-Each sub-handler receives `(payload, event, client)` — the typed payload, the full `StoredEvent`, and the open transaction client.
-
-### `ProjectionManager`
-
-```typescript
-const manager = new ProjectionManager({
-  pool:             pg.Pool,               // connection pool for writes + checkpoints
-  store:            EventStore,            // from base library — provides stream()
-  projections:      ProjectionDefinition[],
-
-  // Callbacks (all optional)
-  onError?:         (name, error) => void, // called when a projection enters 'error' state
-  onRetry?:         (name, attempt, error, nextDelayMs) => void,
-  onStatusChange?:  (name, oldStatus, newStatus) => void,
-
-  // Tuning (all optional)
-  maxRetries?:      number,   // handler retry limit (default: 3)
-  retryDelayMs?:    number,   // base delay, linear: delay × attempt (default: 500 ms)
-  streamBatchSize?: number,   // events per catch-up page (default: 200)
-  pollIntervalMs?:  number,   // NOTIFY fallback poll interval (default: 5 000 ms)
-  setupTimeoutMs?:  number,   // per-projection setup() timeout (default: 30 000 ms)
-  singleInstance?:  boolean,  // advisory lock — one active node per projection
-  dryRun?:         boolean,   // call handler but always ROLLBACK (SQL validation only)
-});
-```
-
-| Method | Description |
-|--------|-------------|
-| `initialize(): Promise<void>` | Creates `projection_checkpoints` table + NOTIFY trigger, calls each `setup()`, inserts checkpoint rows. Idempotent — safe to call on every startup. |
-| `start(): void` | Spawns background catch-up → live loops for every projection. Returns immediately. |
-| `stop(): Promise<void>` | Signals all loops to stop; waits for in-flight handlers to finish; releases connections. |
-| `waitUntilLive(timeoutMs?): Promise<void>` | Resolves when every projection reaches `'live'`, `'error'`, or `'stopped'`. Default timeout: 60 s. |
-| `waitForPosition(name, position, timeoutMs?): Promise<void>` | Resolves when the named projection's checkpoint reaches the target position. Default timeout: 5 s. |
-| `restart(name): Promise<void>` | Re-starts a projection that is in `'error'` state. Re-reads the checkpoint and spawns a new loop. |
-| `getStatus(): ProjectionState[]` | Returns a snapshot of all projection states. |
-
-```typescript
-type ProjectionStatus = 'pending' | 'catching-up' | 'live' | 'error' | 'stopped';
-
-interface ProjectionState {
-  name: string;
-  status: ProjectionStatus;
-  lastProcessedPosition: bigint;
-  lastUpdatedAt: Date | null;
-  errorDetail?: unknown;
-}
-```
-
-### How it works
-
-Each projection runs an independent async loop with two phases:
-
-**Phase 1 — Catch-up:** streams all matching events from the last checkpoint position using keyset pagination (`store.stream()`). Each event is processed atomically — the handler write and the checkpoint update commit together in a single PostgreSQL transaction.
-
-**Phase 2 — Live:** listens for `NOTIFY` signals from a trigger on the `events` table. On each signal (or poll timeout), streams any new events from the latest checkpoint. The shared LISTEN client is started before any loops begin, closing the window between catch-up and live.
-
-**Retry:** if a handler throws, it is retried up to `maxRetries` times with linear backoff (`retryDelayMs × attempt`). If all retries fail the projection enters `'error'` state; other projections are unaffected.
-
-**Atomicity:** because the handler and checkpoint update share one transaction, a crash after `COMMIT` means the event is not replayed; a crash before `COMMIT` means both are rolled back and the event is replayed. Handlers must therefore be **idempotent** — use `INSERT … ON CONFLICT DO UPDATE`.
-
-### Additional schema objects
-
-`manager.initialize()` creates two objects beyond the checkpoints table:
-
-```sql
--- Checkpoint table
-CREATE TABLE IF NOT EXISTS projection_checkpoints (
-  name          TEXT        PRIMARY KEY,
-  last_position BIGINT,
-  updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
--- Trigger: fires once per INSERT statement on the events table
-CREATE OR REPLACE TRIGGER trg_es_events_notify
-  AFTER INSERT ON events
-  FOR EACH STATEMENT
-  EXECUTE FUNCTION es_notify_event_inserted();
--- (function sends NOTIFY on channel 'es_events')
-```
-
-The trigger fires per-statement (not per-row) so a bulk `append([e1, e2, e3])` sends exactly one notification — no thundering herd.
+The default DDL sets aggressive autovacuum thresholds (`scale_factor=0.01`) to handle high-throughput OLTP workloads. Adjust via `ALTER TABLE` if needed.
 
 ---
 
-```bash
-npm install
+## Examples
 
-npm run typecheck          # TypeScript strict check, no emit
-npm run test:unit          # Unit tests — no database required
-npm run test:integration   # Integration tests — requires Docker
-npm run build              # Produces dist/ (ESM + CJS + .d.ts)
-```
+See the `university-app/` directory for a complete vertical-slice example application demonstrating:
 
-Integration tests spin up a PostgreSQL 15 container automatically via `testcontainers`. Docker must be running. The first run pulls the image; subsequent runs reuse it from cache.
+- Command handlers with reducers (hire teacher, create course, enroll student, grade student)
+- Tag-based stream queries
+- Optimistic concurrency with `failIfEventsMatch`
+- Projections for read models
+- Fastify API routes
 
-Run a single test file:
-
-```bash
-npx vitest run tests/unit/query-builder.test.ts
-```
-
-See [`CLAUDE.md`](CLAUDE.md) for the full development workflow, Git flow, and architecture notes.
-
----
-
-## Project Structure
-
-```
-src/
-  index.ts              Public API barrel
-  types.ts              NewEvent, StoredEvent, LoadResult, AppendOptions, StreamOptions, EventStore
-  errors.ts             ConcurrencyError, EventStoreError
-  query/
-    types.ts            Internal: QueryDefinition, Clause, FilterNode
-    builder.ts          ClauseBuilder, KeySelector, ValueSetter
-    query-object.ts     Exported `query` singleton
-    compiler.ts         QueryDefinition → parameterized SQL
-  store/
-    schema.ts           DDL + applySchema()
-    row-mapper.ts       pg row → StoredEvent
-    event-store.ts      PostgresEventStore
-  projections/
-    index.ts            Projections subpath barrel (es-dcb-library/projections)
-    types.ts            defineProjection(), createEventDispatcher(), all public types
-    schema.ts           DDL constants + applyProjectionSchema()
-    loop.ts             Internal: processEvent, runCatchUp, runLive, runProjectionLoop, ManagedListenClient
-    manager.ts          ProjectionManager class
-
-tests/
-  unit/                 Pure unit tests — no database
-  integration/          Tests against a real PostgreSQL instance
-
-university-app/         Full example application (see below)
-```
-
----
-
-## Example Application — University Course Management
-
-`university-app/` is a complete reference implementation built on top of `es-dcb-library`. It models a university course management system and demonstrates how DCB event sourcing handles real-world business rules without aggregates.
-
-### What it models
-
-| Domain concept | Description |
-|---|---|
-| **Teacher** | Hired and dismissed. Cannot be dismissed while assigned to an open course (BR-T4). |
-| **Course** | Lifecycle: draft → open → closed / cancelled. Requires an assigned teacher to publish. |
-| **Student** | Registered with a deterministic ID derived from email (UUID v5). |
-| **Enrollment** | Students enroll in open courses, subject to capacity and prerequisite checks. Drop or withdraw before deadlines; graded by the course teacher when complete. |
-
-Business rules span what would traditionally be multiple aggregates — for example, enrolling a student requires loading the student's completed-course history, the course's current enrollment count, and the student's existing enrollment state simultaneously. DCB handles this naturally: each command defines its own query context at runtime.
-
-### Architecture
-
-The app follows a **vertical slice** pattern — each command handler (`hire-teacher.ts`, `enroll-student.ts`, etc.) defines its own private stream queries and exported reducer functions. No shared state, no cross-slice imports. The Fastify HTTP layer is a thin wrapper that delegates entirely to the command handlers.
-
-The app also demonstrates the projections addon: a `teachers-read-model` projection materialises hired/dismissed teacher state into a `read_teachers` table. The `GET /teachers/:id` route reads from that table when available, falling back to event replay otherwise.
-
-```
-university-app/src/
-  commands/          12 command handlers (one file per use-case)
-  domain/            Event payload types, error classes, ID derivation, clock
-  api/
-    routes/          Fastify route registration (teachers, courses, students)
-    middleware/      Error-to-HTTP-status mapping
-  projections/
-    teachers-read-model.ts   Teachers projection (defineProjection example)
-  server.ts          Fastify factory (testable — accepts EventStore interface)
-  index.ts           Entry point — wires ProjectionManager, waits until live before listening
-```
-
-### Running with Docker Compose
-
-The easiest way to run the university app is with Docker Compose, which starts PostgreSQL and the application together:
-
-```bash
-docker compose up --build
-```
-
-The API is then available at `http://localhost:3000/api/v1`.
-
-### Manual smoke test
-
-```bash
-# Hire a teacher
-curl -s -X POST http://localhost:3000/api/v1/teachers \
-  -H 'Content-Type: application/json' \
-  -d '{"name":"Dr. Smith","email":"smith@uni.edu","department":"CS"}' | jq .
-
-# Create a course (use the teacherId from above)
-curl -s -X POST http://localhost:3000/api/v1/courses \
-  -H 'Content-Type: application/json' \
-  -d '{"title":"Intro CS","semester":"Fall 2026","creditHours":3,"maxStudents":30,
-       "prerequisites":[],"dropDeadline":"2026-09-15","withdrawalDeadline":"2026-10-15"}' | jq .
-
-# Assign the teacher (replace :courseId and :teacherId)
-curl -s -X PUT http://localhost:3000/api/v1/courses/:courseId/teacher \
-  -H 'Content-Type: application/json' \
-  -d '{"teacherId":":teacherId"}' | jq .
-
-# Publish the course
-curl -s -X POST http://localhost:3000/api/v1/courses/:courseId/publish | jq .
-
-# Register a student
-curl -s -X POST http://localhost:3000/api/v1/students \
-  -H 'Content-Type: application/json' \
-  -d '{"name":"Alice","email":"alice@uni.edu","dateOfBirth":"2000-01-01"}' | jq .
-
-# Enroll the student (replace :studentId)
-curl -s -X POST http://localhost:3000/api/v1/courses/:courseId/enrollments \
-  -H 'Content-Type: application/json' \
-  -d '{"studentId":":studentId"}' | jq .
-
-# Grade the student
-curl -s -X POST http://localhost:3000/api/v1/courses/:courseId/enrollments/:studentId/grade \
-  -H 'Content-Type: application/json' \
-  -d '{"grade":88,"gradedBy":":teacherId"}' | jq .
-
-# Check the student's course history
-curl -s http://localhost:3000/api/v1/students/:studentId/courses | jq .
-```
-
-### Running locally (without Docker)
-
-```bash
-# From the repo root
-cd university-app
-npm install
-npm run build
-
-DATABASE_URL=postgres://user:pass@localhost:5432/university \
-  npm start
-```
-
-### API routes
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `POST` | `/api/v1/teachers` | Hire a teacher |
-| `POST` | `/api/v1/teachers/:id/dismiss` | Dismiss a teacher |
-| `GET`  | `/api/v1/teachers/:id` | Get teacher state |
-| `POST` | `/api/v1/courses` | Create a course |
-| `PUT`  | `/api/v1/courses/:id/teacher` | Assign a teacher |
-| `DELETE` | `/api/v1/courses/:id/teacher` | Remove the teacher |
-| `POST` | `/api/v1/courses/:id/publish` | Publish a course |
-| `POST` | `/api/v1/courses/:id/close` | Close a course |
-| `POST` | `/api/v1/courses/:id/cancel` | Cancel a course |
-| `GET`  | `/api/v1/courses/:id` | Get course state |
-| `GET`  | `/api/v1/courses/:id/enrollments` | List enrollments |
-| `POST` | `/api/v1/courses/:id/enrollments` | Enroll a student |
-| `POST` | `/api/v1/courses/:id/enrollments/:studentId/unenroll` | Drop or withdraw |
-| `POST` | `/api/v1/courses/:id/enrollments/:studentId/grade` | Grade a student |
-| `POST` | `/api/v1/students` | Register a student |
-| `GET`  | `/api/v1/students/:id` | Get student state |
-| `GET`  | `/api/v1/students/:id/courses` | Get enrollment history |
-
-### Tests
+Run the example:
 
 ```bash
 cd university-app
+npm install
+npm run typecheck
+npm run test:unit
+npm run test:integration  # requires Docker for PostgreSQL
+```
 
-npm run test:unit          # 194 pure unit tests — no database needed
-npm run test:integration   # 45 integration tests — spins up PostgreSQL via testcontainers
+---
+
+## Design Documents
+
+All design rationale and architecture decisions are in `.docs/`:
+
+| File | Description |
+|------|-------------|
+| [`plan.md`](.docs/plan.md) | Original design: schema, query DSL, concurrency, streaming |
+| [`dcb-tag-model-design.md`](.docs/dcb-tag-model-design.md) | DCB spec alignment: tags, queries, locks, compiler |
+| [`architecture-review.md`](.docs/architecture-review.md) | Tech stack justification (TypeScript vs Rust/C, FFI analysis) |
+| [`implementation-plan.md`](.docs/implementation-plan.md) | Task breakdown with test specs and status tracking |
+| [`university-app-plan.md`](.docs/university-app-plan.md) | University domain: events, commands, business rules, API |
+| [`projections-plan.md`](.docs/projections-plan.md) | Projections addon: loop design, gap-safety, API, schema |
+
+---
+
+## Development
+
+```bash
+# Install dependencies
+npm install
+
+# Type-check
+npm run typecheck
+
+# Run unit tests (fast, no database)
+npm run test:unit
+
+# Run integration tests (requires Docker for PostgreSQL)
+npm run test:integration
+
+# Watch mode
+npm run test:watch
+
+# Build
+npm run build  # Outputs ESM + CJS + .d.ts to dist/
 ```
 
 ---
@@ -766,3 +359,18 @@ npm run test:integration   # 45 integration tests — spins up PostgreSQL via te
 ## License
 
 MIT
+
+---
+
+## Contributing
+
+1. Read the design docs in `.docs/`
+2. Follow the Git flow in `CLAUDE.md` (branch per task, PR per feature, reviewer agent)
+3. Ensure all tests pass before opening a PR
+4. Add tests for new features
+
+---
+
+## Acknowledgements
+
+This library implements the Dynamic Consistency Boundary pattern as specified at [dcb.events](https://dcb.events).
