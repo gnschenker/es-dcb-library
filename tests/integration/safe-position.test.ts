@@ -83,6 +83,8 @@ describe('PostgresEventStore - Out-of-Order Commit Safety (Integration)', () => 
       }
       expect(allEvents).toHaveLength(2);
     } finally {
+      await t.query('ROLLBACK').catch(() => undefined);
+      await s.query('ROLLBACK').catch(() => undefined);
       t.release();
       s.release();
     }
@@ -155,6 +157,8 @@ describe('PostgresEventStore - Out-of-Order Commit Safety (Integration)', () => 
       expect(safeEventsAfterCommit[1]!.type).toBe('EventB');
       expect(safeEventsAfterCommit[1]!.globalPosition).toBe(2n);
     } finally {
+      await client1.query('ROLLBACK').catch(() => undefined);
+      await client2.query('ROLLBACK').catch(() => undefined);
       client1.release();
       client2.release();
     }

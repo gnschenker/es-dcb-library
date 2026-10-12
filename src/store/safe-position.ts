@@ -1,36 +1,53 @@
 import type pg from 'pg';
 
 /**
- * Computes the safe position for reading events in global_position order.
+ * Safe position for ordered followers (projections, stream-after-position).
  *
- * BIGSERIAL assigns global_position when the row is inserted, but writers can
- * commit out of order. A follower must not advance past a position while any
- * lower global_position row might still come from an in-flight transaction.
+ * Each event stores `tx_id` (DEFAULT pg_current_xact_id()). A row is
+ * durable for followers when `tx_id < pg_snapshot_xmin(pg_current_snapshot())`.
  *
- * Each event stores `tx_id` (DEFAULT pg_current_xact_id()) at insert time.
- * The horizon is pg_snapshot_xmin(pg_current_snapshot()): transactions with
- * tx_id >= horizon may still be active. Safe position is the largest
- * global_position such that every row with a lower position has tx_id < horizon.
+ * Uncommitted rows are not visible to other backends, so we cannot scan
+ * in-flight inserts directly. Instead: among committed positions, find the
+ * first missing slot in [1 .. upper_bound] where upper_bound is the greater
+ * of sequence last_value and max committed position. Safe = first_gap - 1
+ * (or upper_bound if no gaps).
  *
- * Equivalent SQL (single snapshot read, no per-row xmin cast):
- *   safe = MIN(global_position) among rows with tx_id >= horizon, minus 1;
- *   if no such rows, safe = MAX(global_position).
- *
- * Performance: one index-friendly lookup on uncommitted tx_id (idx_events_tx_id_position),
- * not a full-table scan casting xmin.
+ * This covers nextval-before-insert: an active transaction can hold a lower
+ * position while a higher one is already committed.
  */
 export async function computeSafePosition(client: pg.ClientBase): Promise<bigint> {
   const result = await client.query<{ safe_pos: string }>(`
     WITH horizon AS (
       SELECT pg_snapshot_xmin(pg_current_snapshot()) AS xmin
+    ),
+    committed AS (
+      SELECT e.global_position
+      FROM events e, horizon h
+      WHERE e.tx_id < h.xmin
+    ),
+    seq AS (
+      SELECT last_value::bigint AS last_val
+      FROM pg_sequences
+      WHERE schemaname = 'public'
+        AND sequencename = 'events_global_position_seq'
+    ),
+    upper AS (
+      SELECT GREATEST(
+        COALESCE((SELECT last_val FROM seq), 0),
+        COALESCE((SELECT MAX(global_position) FROM committed), 0)
+      ) AS hi
+    ),
+    first_gap AS (
+      SELECT MIN(s.pos) AS pos
+      FROM upper u
+      CROSS JOIN LATERAL generate_series(1::bigint, u.hi) AS s(pos)
+      WHERE NOT EXISTS (
+        SELECT 1 FROM committed c WHERE c.global_position = s.pos
+      )
     )
     SELECT COALESCE(
-      (
-        SELECT MIN(e.global_position) - 1
-        FROM events e, horizon h
-        WHERE e.tx_id >= h.xmin
-      ),
-      (SELECT MAX(global_position) FROM events),
+      (SELECT pos - 1 FROM first_gap),
+      (SELECT hi FROM upper),
       0
     )::text AS safe_pos
   `);

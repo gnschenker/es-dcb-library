@@ -45,21 +45,12 @@ Any row with `tx_id >= horizon` may still belong to an in-flight transaction.
 
 ### Safe position
 
-The largest `global_position` such that **every** row with a lower position has `tx_id < horizon`:
+Committed rows are those with `tx_id < pg_snapshot_xmin(pg_current_snapshot())`. Uncommitted rows from other backends are **not visible**, so we cannot scan in-flight inserts directly (including nextval-before-insert).
 
-```sql
-WITH horizon AS (
-  SELECT pg_snapshot_xmin(pg_current_snapshot()) AS xmin
-)
-SELECT COALESCE(
-  (SELECT MIN(e.global_position) - 1 FROM events e, horizon h WHERE e.tx_id >= h.xmin),
-  (SELECT MAX(global_position) FROM events),
-  0
-);
-```
+Let `upper = GREATEST(sequence.last_value, MAX(committed position))`. The first missing position in `1..upper` among committed rows is `gap`. Safe position is `gap - 1`, or `upper` if there is no gap.
 
-- If the lowest in-flight row is at position `p`, safe = `p - 1` (even if a **committed** row exists at `q > p`).
-- If nothing is in-flight, safe = `MAX(global_position)`.
+- Example: S committed position 2, T still holds position 1 (not visible) → committed `{2}`, gap at 1 → safe = 0.
+- After T commits → committed `{1,2}`, no gap → safe = 2.
 
 Followers with `useSafePosition: true` only stream events with `global_position <= safe`.
 
