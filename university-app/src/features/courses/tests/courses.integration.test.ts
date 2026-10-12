@@ -45,8 +45,7 @@ describe('CreateCourse', () => {
     const { courseId } = await createCourse(store, systemClock, BASE_COURSE);
     expect(courseId).toBeTypeOf('string');
 
-    const courseStream = query
-      .eventsOfType('CourseCreated').where.key('courseId').equals(courseId);
+    const courseStream = queryItem({ types: ['CourseCreated'], tags: [`courseId:${courseId}`] });
     const { events } = await store.load(courseStream);
     expect(events).toHaveLength(1);
     expect(events[0]?.data['title']).toBe('Intro CS');
@@ -109,8 +108,7 @@ describe('AssignTeacherToCourse', () => {
     const { courseId } = await createCourse(store, systemClock, BASE_COURSE);
     await assignTeacher(store, systemClock, { courseId, teacherId });
 
-    const s = query
-      .eventsOfType('TeacherAssignedToCourse').where.key('courseId').equals(courseId);
+    const s = queryItem({ types: ['TeacherAssignedToCourse'], tags: [`courseId:${courseId}`] });
     const { events } = await store.load(s);
     expect(events[0]?.data['teacherId']).toBe(teacherId);
     await store.close();
@@ -125,8 +123,7 @@ describe('PublishCourse', () => {
     await assignTeacher(store, systemClock, { courseId, teacherId });
     await publishCourse(store, systemClock, { courseId });
 
-    const s = query
-      .eventsOfType('CoursePublished').where.key('courseId').equals(courseId);
+    const s = queryItem({ types: ['CoursePublished'], tags: [`courseId:${courseId}`] });
     const { events } = await store.load(s);
     expect(events).toHaveLength(1);
     expect(events[0]?.data['teacherId']).toBe(teacherId);
@@ -206,13 +203,11 @@ describe('CancelCourse', () => {
 
     await cancelCourse(store, systemClock, { courseId, reason: 'cancelled' });
 
-    const droppedStream = query
-      .eventsOfType('StudentDropped').where.key('courseId').equals(courseId);
+    const droppedStream = queryItem({ types: ['StudentDropped'], tags: [`courseId:${courseId}`] });
     const { events: droppedEvents } = await store.load(droppedStream);
     expect(droppedEvents).toHaveLength(1); // exactly one student was enrolled
 
-    const cancelledStream = query
-      .eventsOfType('CourseCancelled').where.key('courseId').equals(courseId);
+    const cancelledStream = queryItem({ types: ['CourseCancelled'], tags: [`courseId:${courseId}`] });
     const { events: cancelledEvents } = await store.load(cancelledStream);
     expect(cancelledEvents).toHaveLength(1);
     await store.close();

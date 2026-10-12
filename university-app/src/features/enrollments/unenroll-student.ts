@@ -10,13 +10,14 @@ import type { StudentDroppedPayload, StudentWithdrewPayload } from '../../domain
 
 // Private to this slice
 function enrollmentStream(studentId: string, courseId: string) {
-  return query
-    .eventsOfType('StudentEnrolled').where.key('studentId').equals(studentId).and.key('courseId').equals(courseId)
-    .eventsOfType('StudentDropped').where.key('studentId').equals(studentId).and.key('courseId').equals(courseId)
-    .eventsOfType('StudentWithdrew').where.key('studentId').equals(studentId).and.key('courseId').equals(courseId)
-    .eventsOfType('StudentGraded').where.key('studentId').equals(studentId).and.key('courseId').equals(courseId)
-    .eventsOfType('StudentPassedCourse').where.key('studentId').equals(studentId).and.key('courseId').equals(courseId)
-    .eventsOfType('StudentFailedCourse').where.key('studentId').equals(studentId).and.key('courseId').equals(courseId);
+  return query([
+    { types: ['StudentEnrolled'], tags: [`student:${studentId}`, `course:${courseId}`] },
+    { types: ['StudentDropped'], tags: [`student:${studentId}`, `course:${courseId}`] },
+    { types: ['StudentWithdrew'], tags: [`student:${studentId}`, `course:${courseId}`] },
+    { types: ['StudentGraded'], tags: [`student:${studentId}`, `course:${courseId}`] },
+    { types: ['StudentPassedCourse'], tags: [`student:${studentId}`, `course:${courseId}`] },
+    { types: ['StudentFailedCourse'], tags: [`student:${studentId}`, `course:${courseId}`] },
+  ]);
 }
 
 function courseStream(courseId: string) {

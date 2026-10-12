@@ -57,8 +57,7 @@ describe('EnrollStudent', () => {
     const { studentId } = await registerStudent(store, systemClock, STUDENT);
     await enrollStudent(store, systemClock, { studentId, courseId });
 
-    const s = query
-      .eventsOfType('StudentEnrolled').where.key('studentId').equals(studentId).and.key('courseId').equals(courseId);
+    const s = queryItem({ types: ['StudentEnrolled'], tags: [`studentId:${studentId}`, `courseId:${courseId}`] });
     const { events } = await store.load(s);
     expect(events).toHaveLength(1);
     expect(events[0]?.data['studentId']).toBe(studentId);
@@ -175,8 +174,7 @@ describe('UnenrollStudent', () => {
     // Drop deadline is 2030-09-15; clock is before that
     await unenrollStudent(store, systemClock, { studentId, courseId, reason: 'personal', unenrolledBy: studentId });
 
-    const s = query
-      .eventsOfType('StudentDropped').where.key('studentId').equals(studentId).and.key('courseId').equals(courseId);
+    const s = queryItem({ types: ['StudentDropped'], tags: [`studentId:${studentId}`, `courseId:${courseId}`] });
     const { events } = await store.load(s);
     expect(events).toHaveLength(1);
     await store.close();
@@ -198,8 +196,7 @@ describe('UnenrollStudent', () => {
     const fakeClock = makeClock(new Date('2025-01-01'));
     await unenrollStudent(store, fakeClock, { studentId, courseId, reason: 'conflict', unenrolledBy: studentId });
 
-    const s = query
-      .eventsOfType('StudentWithdrew').where.key('studentId').equals(studentId).and.key('courseId').equals(courseId);
+    const s = queryItem({ types: ['StudentWithdrew'], tags: [`studentId:${studentId}`, `courseId:${courseId}`] });
     const { events } = await store.load(s);
     expect(events).toHaveLength(1);
     await store.close();
@@ -260,9 +257,10 @@ describe('GradeStudent', () => {
     const { teacherId, courseId, studentId } = await setupEnrolled(store);
     await gradeStudent(store, systemClock, { studentId, courseId, grade: 85, gradedBy: teacherId });
 
-    const s = query
-      .eventsOfType('StudentGraded').where.key('studentId').equals(studentId).and.key('courseId').equals(courseId)
-      .eventsOfType('StudentPassedCourse').where.key('studentId').equals(studentId).and.key('courseId').equals(courseId);
+    const s = query([
+      { types: ['StudentGraded'], tags: [`student:${studentId}`, `course:${courseId}`] },
+      { types: ['StudentPassedCourse'], tags: [`student:${studentId}`, `course:${courseId}`] },
+    ]);
     const { events } = await store.load(s);
     expect(events.some(e => e.type === 'StudentGraded')).toBe(true);
     const passed = events.find(e => e.type === 'StudentPassedCourse');
@@ -277,8 +275,7 @@ describe('GradeStudent', () => {
     const { teacherId, courseId, studentId } = await setupEnrolled(store);
     await gradeStudent(store, systemClock, { studentId, courseId, grade: 45, gradedBy: teacherId });
 
-    const s = query
-      .eventsOfType('StudentFailedCourse').where.key('studentId').equals(studentId).and.key('courseId').equals(courseId);
+    const s = queryItem({ types: ['StudentFailedCourse'], tags: [`studentId:${studentId}`, `courseId:${courseId}`] });
     const { events } = await store.load(s);
     expect(events).toHaveLength(1);
     await store.close();
@@ -359,8 +356,7 @@ describe('Full lifecycle smoke test', () => {
     await gradeStudent(store, systemClock, { studentId, courseId, grade: 90, gradedBy: teacherId });
 
     // 6. Verify StudentPassedCourse was emitted
-    const passedStream = query
-      .eventsOfType('StudentPassedCourse').where.key('studentId').equals(studentId).and.key('courseId').equals(courseId);
+    const passedStream = queryItem({ types: ['StudentPassedCourse'], tags: [`studentId:${studentId}`, `courseId:${courseId}`] });
     const { events } = await store.load(passedStream);
     expect(events).toHaveLength(1);
     expect(events[0]?.data['finalGrade']).toBe(90);
@@ -396,10 +392,11 @@ describe('Re-take test', () => {
     await gradeStudent(store, systemClock, { studentId, courseId, grade: 75, gradedBy: teacherId });
 
     // Verify: load studentStream and check completedCourses
-    const studentStream = query
-      .eventsOfType('StudentRegistered').where.key('studentId').equals(studentId)
-      .eventsOfType('StudentPassedCourse').where.key('studentId').equals(studentId)
-      .eventsOfType('StudentFailedCourse').where.key('studentId').equals(studentId);
+    const studentStream = query([
+      { types: ['StudentRegistered'], tags: [`student:${studentId}`] },
+      { types: ['StudentPassedCourse'], tags: [`student:${studentId}`] },
+      { types: ['StudentFailedCourse'], tags: [`student:${studentId}`] },
+    ]);
     const { events } = await store.load(studentStream);
     const state = reduceStudentForEnroll(events);
     expect(state.completedCourses.get(courseId)).toBe('passed');

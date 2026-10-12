@@ -5,9 +5,10 @@ import type { TeacherHiredPayload, TeacherDismissedPayload } from '../../domain/
 export const teachersProjection = defineProjection({
   name: 'teachers-read-model',
 
-  failIfEventsMatch: query
-    .eventsOfType('TeacherHired')
-    .eventsOfType('TeacherDismissed'),
+  query: query([
+    { types: ['TeacherHired'] },
+    { types: ['TeacherDismissed'] },
+  ]),
 
   async setup(client) {
     await client.query(`

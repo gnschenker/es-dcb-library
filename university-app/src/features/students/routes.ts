@@ -14,12 +14,14 @@ function studentStream(studentId: string) {
 }
 
 function studentEnrollmentHistoryStream(studentId: string) {
-  return queryItem({ types: ['StudentEnrolled'], tags: [`studentId:${studentId}`] })
-    .eventsOfType('StudentDropped').where.key('studentId').equals(studentId)
-    .eventsOfType('StudentWithdrew').where.key('studentId').equals(studentId)
-    .eventsOfType('StudentGraded').where.key('studentId').equals(studentId)
-    .eventsOfType('StudentPassedCourse').where.key('studentId').equals(studentId)
-    .eventsOfType('StudentFailedCourse').where.key('studentId').equals(studentId);
+  return query([
+    { types: ['StudentEnrolled'], tags: [`student:${studentId}`] },
+    { types: ['StudentDropped'], tags: [`student:${studentId}`] },
+    { types: ['StudentWithdrew'], tags: [`student:${studentId}`] },
+    { types: ['StudentGraded'], tags: [`student:${studentId}`] },
+    { types: ['StudentPassedCourse'], tags: [`student:${studentId}`] },
+    { types: ['StudentFailedCourse'], tags: [`student:${studentId}`] },
+  ]);
 }
 
 interface StudentReadState {
