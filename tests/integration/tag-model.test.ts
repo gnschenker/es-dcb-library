@@ -269,8 +269,16 @@ describe('PostgresEventStore - Tag Model (Integration)', () => {
 
     it('two different but overlapping queries race - only one succeeds', async () => {
       // This is the critical test: two queries that overlap but are different
-      // In the old system, they'd get different locks and both could append (bug!)
-      // With tag-based locking, they share locks and serialize correctly
+      // Query 1: All events for order:o1 (any tags, just needs order:o1)
+      // Query 2: Events with both order:o1 AND customer:c1
+      // 
+      // Both writers will append events with BOTH tags, so:
+      // - Writer1's query (order:o1) will match Writer2's event (has order:o1)
+      // - Writer2's query (order:o1 + customer:c1) will match Writer1's event (has both)
+      //
+      // With tag-based locking, both acquire locks on order:o1 and customer:c1
+      // (even though Writer1's query doesn't require customer:c1, Writer1's EVENT has it)
+      // One succeeds, one sees the other's event and gets conflict
 
       const results: string[] = [];
 
@@ -281,8 +289,9 @@ describe('PostgresEventStore - Tag Model (Integration)', () => {
         await new Promise(resolve => setTimeout(resolve, 10));
         
         try {
+          // Event has BOTH tags even though query only requires order:o1
           await store.append(
-            { type: 'OrderEvent', data: {}, tags: ['order:o1', 'from:writer1'] },
+            { type: 'OrderEvent', data: {}, tags: ['order:o1', 'customer:c1'] },
             { failIfEventsMatch: q, after: version }
           );
           results.push('writer1:success');
@@ -295,15 +304,16 @@ describe('PostgresEventStore - Tag Model (Integration)', () => {
         }
       };
 
-      // Query 2: Different query but overlaps (any event with customer:c1 and order:o1)
+      // Query 2: Events with both customer:c1 AND order:o1
       const writer2 = async () => {
         const q = queryItem({ tags: ['order:o1', 'customer:c1'] });
         const { version } = await store.load(q);
         await new Promise(resolve => setTimeout(resolve, 10));
         
         try {
+          // Event has both tags, matching the query
           await store.append(
-            { type: 'CustomerOrderEvent', data: {}, tags: ['order:o1', 'customer:c1', 'from:writer2'] },
+            { type: 'CustomerOrderEvent', data: {}, tags: ['order:o1', 'customer:c1'] },
             { failIfEventsMatch: q, after: version }
           );
           results.push('writer2:success');
@@ -319,7 +329,7 @@ describe('PostgresEventStore - Tag Model (Integration)', () => {
       // Race them
       await Promise.all([writer1(), writer2()]);
 
-      // Both queries share the lock on (type:*, tag:order:o1)
+      // Both queries share locks on (type:*, tag:order:o1) and (type:*, tag:customer:c1)
       // One succeeds, one sees the other's event and gets conflict
       expect(results).toHaveLength(2);
       expect(results.filter(r => r.includes('success'))).toHaveLength(1);
