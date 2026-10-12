@@ -3,7 +3,7 @@ import { PostgresEventStore } from 'es-dcb-library';
 import type { EventStore, TagExtractor } from 'es-dcb-library';
 
 // Tag extractors derive tags from event data for all university-app events
-const tagExtractors: Record<string, TagExtractor> = {
+export const tagExtractors: Record<string, TagExtractor> = {
   // Teacher events
   TeacherHired: (event) => [`teacher:${event.data['teacherId']}`],
   TeacherDismissed: (event) => [`teacher:${event.data['teacherId']}`],
