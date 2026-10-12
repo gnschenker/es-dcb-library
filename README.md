@@ -6,6 +6,7 @@ A TypeScript event sourcing library implementing the **Dynamic Consistency Bound
 [![npm version](https://img.shields.io/npm/v/es-dcb-library.svg)](https://www.npmjs.com/package/es-dcb-library)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Node](https://img.shields.io/node/v/es-dcb-library)](https://www.npmjs.com/package/es-dcb-library)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-13%2B-336791?logo=postgresql&logoColor=white)](https://www.postgresql.org/)
 
 ## What is DCB?
 
@@ -29,6 +30,15 @@ See the [DCB specification](https://dcb.events) for the full design.
 ```bash
 npm install es-dcb-library pg
 ```
+
+### Requirements
+
+- **Node.js** 18 or newer (`engines` in `package.json`)
+- **PostgreSQL** 13 or newer
+
+The event store stores each row’s inserting transaction id in a `tx_id` column (`xid8`, default `pg_current_xact_id()`). Committed-only streaming and projections compare `tx_id` to `pg_snapshot_xmin(pg_current_snapshot())`, which requires PostgreSQL **13+** (`xid8` and related snapshot APIs). PostgreSQL 12 and earlier are not supported.
+
+You also need the **`pg`** driver (see install command above); it is a peer dependency of this package.
 
 ## Quick Start
 

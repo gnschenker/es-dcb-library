@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 First stable release aligned with the [DCB specification](https://dcb.events).
 
+**Runtime requirements:** Node.js 18+ and **PostgreSQL 13+**. The `tx_id` column (`xid8`, `pg_current_xact_id()`) and committed-only streaming (`pg_snapshot_xmin`) depend on PostgreSQL 13 or newer.
+
 ### Added
 
 - **Tag-based query API**: `query()`, `queryItem()`, `queryAll()`, and `combineQueries()` for building `Query` objects (OR across items; AND within each item’s `types` / `tags`).
@@ -19,7 +21,7 @@ First stable release aligned with the [DCB specification](https://dcb.events).
 - **Tag-based advisory locking** on `(type, tag)` pairs for overlapping consistency boundaries.
 - **Projections addon** (`es-dcb-library/projections`): `defineProjection`, `createEventDispatcher`, `ProjectionManager` with catch-up, live `LISTEN/NOTIFY`, retries, and per-projection isolation.
 - **Committed-only streaming** (`committedOnly: true`) with `(tx_id, global_position)` ordering and `StreamCursor` checkpoints for projection gap safety.
-- **`tx_id` column** on events (PostgreSQL `xid8`) for committed-stream visibility.
+- **`tx_id` column** on events (PostgreSQL `xid8`, default `pg_current_xact_id()`) for committed-stream visibility (**requires PostgreSQL 13+**).
 - **`applySchema`**, dual **ESM + CJS** builds, and TypeScript declarations for the main and `./projections` entry points.
 
 ### Changed
