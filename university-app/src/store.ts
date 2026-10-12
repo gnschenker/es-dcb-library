@@ -45,6 +45,14 @@ export const tagExtractors: Record<string, TagExtractor> = {
     `course:${event.data['courseId']}`,
     `student:${event.data['studentId']}`,
   ],
+  StudentPassedCourse: (event) => [
+    `course:${event.data['courseId']}`,
+    `student:${event.data['studentId']}`,
+  ],
+  StudentFailedCourse: (event) => [
+    `course:${event.data['courseId']}`,
+    `student:${event.data['studentId']}`,
+  ],
 };
 
 export function createStore(connectionString: string): EventStore {
