@@ -20,5 +20,6 @@ export function makeEvent(type: string, data: Record<string, unknown>): StoredEv
     metadata: null,
     occurredAt: new Date(),
     tags,
+    txId: String(globalPosition),
   };
 }
