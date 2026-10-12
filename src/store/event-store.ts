@@ -1,10 +1,12 @@
 import pg from 'pg';
 import type { Query } from '../query/types.js';
 import type { NewEvent, StoredEvent, LoadResult, AppendCondition, StreamOptions, EventStore, TagExtractor } from '../types.js';
-import { ConcurrencyError, EventStoreError } from '../errors.js';
+import { UNTAGGED } from '../types.js';
+import { ConcurrencyError, EventStoreError, MissingTagExtractorError } from '../errors.js';
 import { compileLoadQuery, compileExistsQuery, compileVersionCheckQuery, compileStreamQuery, extractLockPairs } from '../query/compiler.js';
 import { applySchema } from './schema.js';
 import { mapRow } from './row-mapper.js';
+import { computeSafePosition } from './safe-position.js';
 
 export interface EventStoreConfig {
   pool: pg.Pool;
@@ -12,13 +14,20 @@ export interface EventStoreConfig {
    * Tag extractors per event type.
    * Called for each event to derive tags from the event data.
    * Tags are merged with event.tags (if present) and deduplicated.
+   * 
+   * Use the UNTAGGED symbol to mark event types that are intentionally untagged:
+   * @example
+   * tagExtractors: {
+   *   OrderCreated: (event) => [`order:${event.data.orderId}`],
+   *   SystemEvent: UNTAGGED,  // intentionally has no tags
+   * }
    */
-  tagExtractors?: Record<string, TagExtractor>;
+  tagExtractors?: Record<string, TagExtractor | typeof UNTAGGED>;
 }
 
 export class PostgresEventStore implements EventStore {
   private readonly pool: pg.Pool;
-  private readonly tagExtractors: Record<string, TagExtractor>;
+  private readonly tagExtractors: Record<string, TagExtractor | typeof UNTAGGED>;
 
   constructor(config: EventStoreConfig) {
     this.pool = config.pool;
@@ -100,8 +109,26 @@ export class PostgresEventStore implements EventStore {
       for (const event of eventList) {
         // Compute final tags: merge event.tags with extracted tags
         const eventTags = event.tags ?? [];
-        const extractor = this.tagExtractors[event.type];
-        const extractedTags = extractor ? extractor(event) : [];
+        const extractorOrMarker = this.tagExtractors[event.type];
+        
+        let extractedTags: string[] = [];
+        
+        if (extractorOrMarker === UNTAGGED) {
+          // Type is marked as intentionally untagged
+          extractedTags = [];
+        } else if (typeof extractorOrMarker === 'function') {
+          // Extractor function exists
+          extractedTags = extractorOrMarker(event);
+        } else if (eventTags.length === 0) {
+          // No extractor, no explicit tags -> fail loudly
+          throw new MissingTagExtractorError(
+            event.type,
+            `Event type '${event.type}' has no registered tag extractor and no explicit tags were provided. ` +
+            `Either register a tag extractor, mark it as UNTAGGED, or pass tags explicitly in the event.`
+          );
+        }
+        // If eventTags.length > 0 but no extractor, allow it (explicit tags provided)
+        
         const finalTags = [...new Set([...eventTags, ...extractedTags])]; // deduplicate
 
         const sql = `INSERT INTO events (type, data, metadata, tags)
@@ -121,7 +148,7 @@ export class PostgresEventStore implements EventStore {
       await client.query('COMMIT');
       return stored;
     } catch (err) {
-      if (!(err instanceof EventStoreError) && !(err instanceof ConcurrencyError)) {
+      if (!(err instanceof EventStoreError) && !(err instanceof ConcurrencyError) && !(err instanceof MissingTagExtractorError)) {
         await client.query('ROLLBACK').catch(() => undefined);
         throw new EventStoreError(`Failed to append events: ${String(err)}`, err);
       }
@@ -133,10 +160,28 @@ export class PostgresEventStore implements EventStore {
 
   async *stream(query: Query, options: StreamOptions = {}): AsyncGenerator<StoredEvent> {
     const batchSize = options.batchSize ?? 100;
+    const useSafePosition = options.useSafePosition ?? false;
     let lastPosition = options.afterPosition ?? 0n;
 
     while (true) {
-      const { sql, params } = compileStreamQuery(query, lastPosition, batchSize);
+      let maxPosition: bigint | undefined = undefined;
+      
+      if (useSafePosition) {
+        // Query safe position from a pool connection
+        const client = await this.pool.connect();
+        try {
+          maxPosition = await computeSafePosition(client);
+        } finally {
+          client.release();
+        }
+        
+        // If lastPosition >= maxPosition, no new safe events to read yet
+        if (lastPosition >= maxPosition) {
+          break;
+        }
+      }
+      
+      const { sql, params } = compileStreamQuery(query, lastPosition, batchSize, maxPosition);
       let result: pg.QueryResult;
       try {
         result = await this.pool.query(sql, params as unknown[]);

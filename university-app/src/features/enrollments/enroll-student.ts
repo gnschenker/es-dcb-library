@@ -1,5 +1,5 @@
 import type { EventStore, StoredEvent, NewEvent } from 'es-dcb-library';
-import { query, queryItem } from 'es-dcb-library';
+import { query, queryItem, combineQueries } from 'es-dcb-library';
 import type { Clock } from '../../domain/clock.js';
 import {
   StudentNotFoundError,
@@ -141,17 +141,37 @@ export async function enrollStudent(
   clock: Clock,
   input: EnrollStudentInput,
 ): Promise<void> {
-  const [
-    { events: studentEvents },
-    { events: courseEvents },
-    { events: enrollmentEvents, version: enrollmentVersion },
-    { events: courseEnrollEvents, version: courseEnrollVersion },
-  ] = await Promise.all([
-    store.load(studentStream(input.studentId)),
-    store.load(courseStream(input.courseId)),
-    store.load(enrollmentStream(input.studentId, input.courseId)),
-    store.load(courseEnrollmentStream(input.courseId)),
-  ]);
+  // Combine all queries we need to load
+  const allStreams = combineQueries(
+    studentStream(input.studentId),
+    courseStream(input.courseId),
+    enrollmentStream(input.studentId, input.courseId),
+    courseEnrollmentStream(input.courseId),
+  );
+  
+  // Load once with a single version
+  const { events, version } = await store.load(allStreams);
+  
+  // Split events for each reducer
+  const studentTags = new Set([`student:${input.studentId}`]);
+  const courseTags = new Set([`course:${input.courseId}`]);
+  const enrollmentTags = new Set([`student:${input.studentId}`, `course:${input.courseId}`]);
+  
+  const studentEvents = events.filter(e => 
+    studentTags.has(e.tags[0] ?? '') && 
+    ['StudentRegistered', 'StudentPassedCourse', 'StudentFailedCourse'].includes(e.type)
+  );
+  const courseEvents = events.filter(e => 
+    courseTags.has(e.tags[0] ?? '') &&
+    ['CourseCreated', 'CoursePublished', 'CourseClosed', 'CourseCancelled', 'TeacherAssignedToCourse', 'TeacherRemovedFromCourse'].includes(e.type)
+  );
+  const enrollmentEvents = events.filter(e => 
+    e.tags.length >= 2 && e.tags.includes(`student:${input.studentId}`) && e.tags.includes(`course:${input.courseId}`)
+  );
+  const courseEnrollEvents = events.filter(e => 
+    courseTags.has(e.tags[0] ?? '') &&
+    ['StudentEnrolled', 'StudentDropped', 'StudentWithdrew'].includes(e.type)
+  );
 
   const studentState = reduceStudentForEnroll(studentEvents);
   if (!studentState.registered) {
@@ -199,11 +219,8 @@ export async function enrollStudent(
   await store.append(
     [{ type: 'StudentEnrolled', data: data as unknown as Record<string, unknown>} as NewEvent],
     {
-      failIfEventsMatch: query([
-        ...enrollmentStream(input.studentId, input.courseId).items,
-        ...courseEnrollmentStream(input.courseId).items,
-      ]),
-      after: enrollmentVersion > courseEnrollVersion ? enrollmentVersion : courseEnrollVersion,
+      failIfEventsMatch: allStreams,
+      after: version,
     },
   );
 }

@@ -108,6 +108,7 @@ export function compileStreamQuery(
   query: Query,
   afterPosition: bigint,
   batchSize: number,
+  maxPosition?: bigint,
 ): CompiledQuery {
   const params: unknown[] = [];
   const counter = { n: 0 };
@@ -115,7 +116,15 @@ export function compileStreamQuery(
 
   params.push(afterPosition);
   counter.n += 1;
-  const positionRef = `$${counter.n}`;
+  const afterRef = `$${counter.n}`;
+
+  let positionConstraint = `global_position > ${afterRef}`;
+  if (maxPosition !== undefined) {
+    params.push(maxPosition);
+    counter.n += 1;
+    const maxRef = `$${counter.n}`;
+    positionConstraint += ` AND global_position <= ${maxRef}`;
+  }
 
   params.push(batchSize);
   counter.n += 1;
@@ -124,7 +133,7 @@ export function compileStreamQuery(
   const sql = [
     'SELECT global_position, event_id, type, data, metadata, occurred_at, tags',
     'FROM events',
-    `${whereClause} AND global_position > ${positionRef}`,
+    `${whereClause} AND ${positionConstraint}`,
     'ORDER BY global_position ASC',
     `LIMIT ${limitRef}`,
   ].join('\n');

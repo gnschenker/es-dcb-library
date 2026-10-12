@@ -1,5 +1,5 @@
 import type { EventStore, StoredEvent, NewEvent } from 'es-dcb-library';
-import { query, queryItem } from 'es-dcb-library';
+import { query, queryItem, combineQueries } from 'es-dcb-library';
 import type { Clock } from '../../domain/clock.js';
 import {
   CourseNotFoundError,
@@ -75,13 +75,21 @@ export async function closeCourse(
   clock: Clock,
   input: CloseCourseInput,
 ): Promise<void> {
-  const [
-    { events: courseEvents, version: courseVersion },
-    { events: enrollEvents },
-  ] = await Promise.all([
-    store.load(courseStream(input.courseId)),
-    store.load(courseEnrollmentStream(input.courseId)),
-  ]);
+  const allStreams = combineQueries(
+    courseStream(input.courseId),
+    courseEnrollmentStream(input.courseId),
+  );
+  
+  const { events, version } = await store.load(allStreams);
+  
+  const courseEvents = events.filter(e => 
+    e.tags.includes(`course:${input.courseId}`) &&
+    ['CourseCreated', 'CoursePublished', 'CourseClosed', 'CourseCancelled', 'TeacherAssignedToCourse', 'TeacherRemovedFromCourse'].includes(e.type)
+  );
+  const enrollEvents = events.filter(e => 
+    e.tags.includes(`course:${input.courseId}`) &&
+    ['StudentEnrolled', 'StudentDropped', 'StudentWithdrew'].includes(e.type)
+  );
 
   const courseState = reduceCourseForClose(courseEvents);
   if (courseState.status === 'none') {
@@ -93,7 +101,6 @@ export async function closeCourse(
     );
   }
 
-  // Collect unique student IDs from the enrollment stream
   const studentIds = new Set<string>();
   for (const event of enrollEvents) {
     if (event.type === 'StudentEnrolled') {
@@ -101,8 +108,6 @@ export async function closeCourse(
     }
   }
 
-  // Per-student check: courseEnrollmentStream lacks grading events; load per-student enrollmentStream
-  // to get correct terminal status (graded/passed/failed students should not block close)
   for (const studentId of studentIds) {
     const { events: perStudentEvents } = await store.load(enrollmentStream(studentId, input.courseId));
     const enrollmentState = reduceEnrollmentForClose(perStudentEvents);
@@ -120,6 +125,6 @@ export async function closeCourse(
 
   await store.append(
     [{ type: 'CourseClosed', data: data as unknown as Record<string, unknown>} as NewEvent],
-    { failIfEventsMatch: courseStream(input.courseId), after: courseVersion },
+    { failIfEventsMatch: allStreams, after: version },
   );
 }

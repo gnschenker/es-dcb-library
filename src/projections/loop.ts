@@ -142,6 +142,7 @@ export async function runCatchUp(
   const eventStream = store.stream(def.query, {
     afterPosition: state.lastPos,
     batchSize: config.streamBatchSize,
+    useSafePosition: true,
   });
 
   for await (const event of eventStream) {
@@ -220,6 +221,7 @@ async function drainNewEvents(
   const eventStream = store.stream(def.query, {
     afterPosition: state.lastPos,
     batchSize: config.streamBatchSize,
+    useSafePosition: true,
   });
 
   for await (const event of eventStream) {

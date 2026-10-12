@@ -194,20 +194,97 @@ const q2 = query([
 ]);
 ```
 
+### Combining Queries
+
+For command handlers that load multiple streams, use `combineQueries` to merge them into a single query and version:
+
+```typescript
+import { query, combineQueries } from 'es-dcb-library';
+
+function studentStream(studentId: string) {
+  return query([
+    { types: ['StudentRegistered'], tags: [`student:${studentId}`] },
+    { types: ['StudentPassed'], tags: [`student:${studentId}`] },
+  ]);
+}
+
+function courseStream(courseId: string) {
+  return query([
+    { types: ['CourseCreated'], tags: [`course:${courseId}`] },
+    { types: ['CoursePublished'], tags: [`course:${courseId}`] },
+  ]);
+}
+
+function enrollmentStream(studentId: string, courseId: string) {
+  return query([
+    { types: ['StudentEnrolled'], tags: [`student:${studentId}`, `course:${courseId}`] },
+    { types: ['StudentDropped'], tags: [`student:${studentId}`, `course:${courseId}`] },
+  ]);
+}
+
+// Load all three streams with a single version
+const allStreams = combineQueries(
+  studentStream('s1'),
+  courseStream('c1'),
+  enrollmentStream('s1', 'c1')
+);
+
+const { events, version } = await store.load(allStreams);
+
+// Filter events for each reducer
+const studentEvents = events.filter(e => e.tags.includes('student:s1'));
+const courseEvents = events.filter(e => e.tags.includes('course:c1'));
+const enrollmentEvents = events.filter(e => 
+  e.tags.includes('student:s1') && e.tags.includes('course:c1')
+);
+
+// Reduce state, make decision, append with single version
+await store.append(newEvents, {
+  failIfEventsMatch: allStreams,
+  after: version,
+});
+```
+
+**Why this matters**: Loading streams separately and picking `max(version1, version2, version3)` is error-prone. A single combined query ensures correct concurrency checking.
+```
+
 ### Tag Extractors
 
 ```typescript
-import { PostgresEventStore, TagExtractor } from 'es-dcb-library';
+import { PostgresEventStore, TagExtractor, UNTAGGED } from 'es-dcb-library';
 
-const tagExtractors: Record<string, TagExtractor> = {
+const tagExtractors: Record<string, TagExtractor | typeof UNTAGGED> = {
   OrderCreated: (event) => [
     `order:${event.data.orderId}`,
     `customer:${event.data.customerId}`,
   ],
   OrderShipped: (event) => [`order:${event.data.orderId}`],
+  SystemEvent: UNTAGGED,  // Intentionally has no tags
 };
 
 const store = new PostgresEventStore({ pool, tagExtractors });
+```
+
+**Strict tag extraction**: By default, appending an event without a registered extractor and without explicit tags throws `MissingTagExtractorError`. This prevents silently storing untagged events that queries won't find.
+
+**Three ways to tag events**:
+1. **Tag extractor**: Register a function for the event type
+2. **Explicit tags**: Pass `tags: [...]` in the event (merged with extractor output)
+3. **Mark as UNTAGGED**: Use the `UNTAGGED` symbol for types that intentionally have no tags
+
+```typescript
+// Allowed: has tag extractor
+await store.append({ type: 'OrderCreated', data: { orderId: 'o1', customerId: 'c1' } });
+
+// Allowed: explicit tags provided
+await store.append({ type: 'UnknownEvent', data: {}, tags: ['tag:foo'] });
+
+// Allowed: marked as UNTAGGED
+await store.append({ type: 'SystemEvent', data: {} });
+
+// Error: no extractor, no tags, not marked UNTAGGED
+await store.append({ type: 'UnknownEvent', data: {} });
+// throws MissingTagExtractorError
 ```
 
 ---
@@ -262,6 +339,19 @@ await manager.start();
 - **Atomic handler + checkpoint**: Each event is processed in a transaction that includes both the handler logic and the checkpoint update. Handlers must be idempotent (`INSERT ... ON CONFLICT` or `UPDATE WHERE`).
 - **Isolation**: Each projection runs independently. A slow or errored projection does not block others.
 - **Gap-free guarantee**: The shared LISTEN client is started before any projection loop begins, ensuring no notifications are missed during catch-up.
+- **Safe position protection**: Projections use `useSafePosition: true` to prevent skipping events when transactions commit out of order. See [Safe Position Design](./.docs/safe-position-design.md) for details.
+
+### Projection Gap Safety
+
+PostgreSQL's `BIGSERIAL` assigns `global_position` before commit, so transaction T1 (position 100) might commit after T2 (position 101). Without protection, a projection reading up to position 101 would permanently skip position 100.
+
+**Solution**: Projections use the `useSafePosition: true` stream option, which computes a "safe position" using PostgreSQL's transaction visibility system (`xmin` + `txid_current_snapshot()`). Events are only processed up to the highest position where all earlier transactions have committed.
+
+- **Performance**: Safe position queries are fast (~1ms) and do not require schema changes.
+- **Latency**: Projections may lag by 10-100ms during high write concurrency, which is acceptable for most use cases.
+- **No data loss**: Guaranteed event ordering with no gaps.
+
+For full design rationale, see [`.docs/safe-position-design.md`](./.docs/safe-position-design.md).
 
 See `.docs/projections-plan.md` for full design details.
 
