@@ -1,0 +1,238 @@
+import { describe, it, expect, beforeEach, afterAll } from 'vitest';
+import pg from 'pg';
+import { PostgresEventStore, queryItem, query } from '../../src/index.js';
+import { createTestPool, resetDatabase } from './helpers.js';
+
+let pool: pg.Pool;
+let store: PostgresEventStore;
+
+beforeEach(async () => {
+  if (!pool) pool = createTestPool();
+  if (!store) store = new PostgresEventStore({ pool });
+  await resetDatabase(pool);
+});
+
+afterAll(async () => {
+  await pool?.end();
+});
+
+describe('PostgresEventStore - Tag Model (Integration)', () => {
+  describe('Schema and basic append', () => {
+    it('appends events with tags', async () => {
+      const [stored] = await store.append({
+        type: 'OrderCreated',
+        data: { orderId: 'o1' },
+        tags: ['order:o1', 'customer:c1'],
+      });
+
+      expect(stored!.type).toBe('OrderCreated');
+      expect(stored!.tags).toEqual(['order:o1', 'customer:c1']);
+      expect(stored!.data).toEqual({ orderId: 'o1' });
+      expect(stored!.globalPosition).toBeGreaterThan(0n);
+    });
+
+    it('tags are required (not optional)', async () => {
+      // Without tags, must explicitly pass empty array
+      const [stored] = await store.append({
+        type: 'EventWithoutTags',
+        data: {},
+        tags: [],
+      });
+
+      expect(stored!.tags).toEqual([]);
+    });
+  });
+
+  describe('Tag-based queries', () => {
+    beforeEach(async () => {
+      await store.append([
+        { type: 'OrderCreated', data: { orderId: 'o1' }, tags: ['order:o1', 'customer:c1'] },
+        { type: 'OrderCreated', data: { orderId: 'o2' }, tags: ['order:o2', 'customer:c1'] },
+        { type: 'OrderShipped', data: { orderId: 'o1' }, tags: ['order:o1'] },
+        { type: 'PaymentReceived', data: { orderId: 'o1' }, tags: ['order:o1', 'customer:c1'] },
+        { type: 'OrderCreated', data: { orderId: 'o3' }, tags: ['order:o3', 'customer:c2'] },
+      ]);
+    });
+
+    it('queries by single type', async () => {
+      const q = queryItem({ types: ['OrderCreated'] });
+      const { events } = await store.load(q);
+
+      expect(events).toHaveLength(3);
+      expect(events.every(e => e.type === 'OrderCreated')).toBe(true);
+    });
+
+    it('queries by single tag (any type)', async () => {
+      const q = queryItem({ tags: ['order:o1'] });
+      const { events } = await store.load(q);
+
+      expect(events).toHaveLength(3);
+      expect(events.map(e => e.type)).toEqual(['OrderCreated', 'OrderShipped', 'PaymentReceived']);
+      expect(events.every(e => e.tags.includes('order:o1'))).toBe(true);
+    });
+
+    it('queries by type AND tags', async () => {
+      const q = queryItem({ types: ['OrderCreated'], tags: ['customer:c1'] });
+      const { events } = await store.load(q);
+
+      expect(events).toHaveLength(2);
+      expect(events.every(e => e.type === 'OrderCreated')).toBe(true);
+      expect(events.every(e => e.tags.includes('customer:c1'))).toBe(true);
+    });
+
+    it('queries with multiple types (OR)', async () => {
+      const q = queryItem({ types: ['OrderCreated', 'OrderShipped'] });
+      const { events } = await store.load(q);
+
+      expect(events).toHaveLength(4);
+    });
+
+    it('queries with multiple tags (AND within item)', async () => {
+      const q = queryItem({ tags: ['order:o1', 'customer:c1'] });
+      const { events } = await store.load(q);
+
+      expect(events).toHaveLength(2); // OrderCreated and PaymentReceived for o1
+      expect(events.every(e => e.tags.includes('order:o1') && e.tags.includes('customer:c1'))).toBe(true);
+    });
+
+    it('queries with multiple items (OR at top level)', async () => {
+      const q = query([
+        { types: ['OrderShipped'] },
+        { tags: ['customer:c2'] },
+      ]);
+      const { events } = await store.load(q);
+
+      expect(events).toHaveLength(2); // OrderShipped + OrderCreated for c2
+    });
+  });
+
+  describe('Tag extractors', () => {
+    it('derives tags from event data via registered extractor', async () => {
+      const storeWithExtractors = new PostgresEventStore({
+        pool,
+        tagExtractors: {
+          OrderCreated: (event) => [
+            `order:${event.data['orderId']}`,
+            `customer:${event.data['customerId']}`,
+          ],
+        },
+      });
+
+      const [stored] = await storeWithExtractors.append({
+        type: 'OrderCreated',
+        data: { orderId: 'o1', customerId: 'c1' },
+        tags: [], // Empty, will be filled by extractor
+      });
+
+      expect(stored!.tags).toContain('order:o1');
+      expect(stored!.tags).toContain('customer:c1');
+    });
+
+    it('merges explicit tags with extracted tags', async () => {
+      const storeWithExtractors = new PostgresEventStore({
+        pool,
+        tagExtractors: {
+          OrderCreated: (event) => [`order:${event.data['orderId']}`],
+        },
+      });
+
+      const [stored] = await storeWithExtractors.append({
+        type: 'OrderCreated',
+        data: { orderId: 'o1' },
+        tags: ['manual:tag'],
+      });
+
+      expect(stored!.tags).toContain('order:o1');
+      expect(stored!.tags).toContain('manual:tag');
+    });
+  });
+
+  describe('Append condition', () => {
+    it('fails when matching events exist after specified position', async () => {
+      const [event1] = await store.append({
+        type: 'OrderCreated',
+        data: {},
+        tags: ['order:o1'],
+      });
+
+      await store.append({
+        type: 'OrderShipped',
+        data: {},
+        tags: ['order:o1'],
+      });
+
+      const q = queryItem({ tags: ['order:o1'] });
+
+      // Try to append with outdated position
+      await expect(
+        store.append(
+          { type: 'OrderCancelled', data: {}, tags: ['order:o1'] },
+          { failIfEventsMatch: q, after: event1!.globalPosition }
+        )
+      ).rejects.toThrow();
+    });
+
+    it('succeeds when no matching events exist after position', async () => {
+      const [event1] = await store.append({
+        type: 'OrderCreated',
+        data: {},
+        tags: ['order:o1'],
+      });
+
+      await store.append({
+        type: 'UnrelatedEvent',
+        data: {},
+        tags: ['other:tag'],
+      });
+
+      const q = queryItem({ tags: ['order:o1'] });
+
+      // Should succeed because no order:o1 events after event1
+      await expect(
+        store.append(
+          { type: 'OrderShipped', data: {}, tags: ['order:o1'] },
+          { failIfEventsMatch: q, after: event1!.globalPosition }
+        )
+      ).resolves.toBeDefined();
+    });
+  });
+
+  describe('Overlapping queries with tag-based locking', () => {
+    it('serializes two overlapping queries correctly', async () => {
+      // This tests the fix for the overlapping-query hole
+      const results: string[] = [];
+
+      const writer1 = async () => {
+        const q = queryItem({ tags: ['order:o1'] });
+        const { version } = await store.load(q);
+        await new Promise(resolve => setTimeout(resolve, 50)); // Simulate work
+        await store.append(
+          { type: 'Writer1', data: {}, tags: ['order:o1', 'writer:1'] },
+          { failIfEventsMatch: q, after: version }
+        );
+        results.push('writer1');
+      };
+
+      const writer2 = async () => {
+        const q = queryItem({ tags: ['order:o1'] });
+        const { version } = await store.load(q);
+        await new Promise(resolve => setTimeout(resolve, 50)); // Simulate work
+        await store.append(
+          { type: 'Writer2', data: {}, tags: ['order:o1', 'writer:2'] },
+          { failIfEventsMatch: q, after: version }
+        );
+        results.push('writer2');
+      };
+
+      // Both try to append concurrently
+      await Promise.all([writer1(), writer2()]);
+
+      // Both should succeed (one waits for the other due to tag-based locking)
+      expect(results).toHaveLength(2);
+
+      // Verify both events are in the store
+      const finalEvents = await store.load(queryItem({ tags: ['order:o1'] }));
+      expect(finalEvents.events).toHaveLength(2);
+    });
+  });
+});

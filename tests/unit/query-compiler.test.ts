@@ -1,182 +1,204 @@
-import { describe, it, expect } from "vitest";
-import { query } from "../../src/query/query-object.js";
+import { describe, it, expect } from 'vitest';
 import {
   compileLoadQuery,
   compileVersionCheckQuery,
   compileStreamQuery,
-  compileCanonicalKey,
-} from "../../src/query/compiler.js";
+  compileExistsQuery,
+  extractLockPairs,
+} from '../../src/query/compiler.js';
+import { query, queryAll, queryItem } from '../../src/query/builder.js';
 
-describe("compileLoadQuery", () => {
-
-  it("no filter - single clause", () => {
-    const q = query.eventsOfType("OrderCreated");
+describe('compileLoadQuery()', () => {
+  it('compiles a single-item query with types and tags', () => {
+    const q = queryItem({ types: ['EventA'], tags: ['tag1', 'tag2'] });
     const { sql, params } = compileLoadQuery(q);
-    expect(params).toEqual(["OrderCreated"]);
-    expect(sql).toContain("WHERE type = $1");
-    expect(sql).toContain("ORDER BY global_position ASC");
-    expect(sql).toMatch(/^SELECT global_position, event_id, type, payload, metadata, occurred_at/);
+    
+    expect(sql).toContain('SELECT global_position, event_id, type, data, metadata, occurred_at, tags');
+    expect(sql).toContain('FROM events');
+    expect(sql).toContain('WHERE');
+    expect(sql).toContain('ORDER BY global_position ASC');
+    expect(sql).toContain('type = ANY($1)');
+    expect(sql).toContain('tags @> $2');
+    expect(params).toHaveLength(2);
+    expect(params[0]).toEqual(['EventA']);
+    expect(params[1]).toEqual(['tag1', 'tag2']);
   });
 
-  it("single attr filter", () => {
-    const q = query.eventsOfType("OrderCreated").where.key("customerId").equals("c1");
+  it('compiles a query with types only (no tags)', () => {
+    const q = queryItem({ types: ['EventA', 'EventB'] });
     const { sql, params } = compileLoadQuery(q);
-    expect(params[0]).toBe("OrderCreated");
-    expect(params[1]).toBe(JSON.stringify({ customerId: "c1" }));
-    expect(sql).toContain("WHERE (type = $1 AND payload @> $2::jsonb)");
+    
+    expect(sql).toContain('type = ANY($1)');
+    expect(sql).not.toContain('tags @>');
+    expect(params).toEqual([['EventA', 'EventB']]);
   });
 
-  it("AND filter - two attributes", () => {
-    const q = query.eventsOfType("Order").where.key("a").equals(1).and.key("b").equals(2);
+  it('compiles a query with tags only (any type)', () => {
+    const q = queryItem({ tags: ['tag1'] });
     const { sql, params } = compileLoadQuery(q);
-    expect(params[0]).toBe("Order");
-    expect(params[1]).toBe(JSON.stringify({ a: 1 }));
-    expect(params[2]).toBe(JSON.stringify({ b: 2 }));
-    expect(sql).toContain("payload @> $2::jsonb AND payload @> $3::jsonb");
+    
+    expect(sql).toContain('tags @> $1');
+    expect(sql).not.toContain('type = ANY');
+    expect(params).toEqual([['tag1']]);
   });
 
-  it("OR filter - two attributes", () => {
-    const q = query.eventsOfType("Order").where.key("status").equals("pending").or.key("status").equals("active");
+  it('compiles queryAll (matches all events)', () => {
+    const q = queryAll();
     const { sql, params } = compileLoadQuery(q);
-    expect(params[0]).toBe("Order");
-    expect(params[1]).toBe(JSON.stringify({ status: "pending" }));
-    expect(params[2]).toBe(JSON.stringify({ status: "active" }));
-    expect(sql).toContain("payload @> $2::jsonb OR payload @> $3::jsonb");
+    
+    expect(sql).toContain('WHERE TRUE');
+    expect(params).toHaveLength(0);
   });
 
-  it("multi-type - first clause has filter, second does not", () => {
-    const q = query.eventsOfType("OrderCreated").where.key("x").equals("v").eventsOfType("OrderShipped");
+  it('compiles multi-item query with OR', () => {
+    const q = query([
+      { types: ['EventA'], tags: ['tag1'] },
+      { types: ['EventB'], tags: ['tag2'] },
+    ]);
     const { sql, params } = compileLoadQuery(q);
-    expect(params.length).toBe(3);
-    expect(params[0]).toBe("OrderCreated");
-    expect(params[1]).toBe(JSON.stringify({ x: "v" }));
-    expect(params[2]).toBe("OrderShipped");
-    expect(sql).toContain("WHERE ((type = $1 AND payload @> $2::jsonb) OR type = $3)");
+    
+    expect(sql).toContain('WHERE (');
+    expect(sql).toContain('OR');
+    expect(params).toHaveLength(4);
+    expect(params[0]).toEqual(['EventA']);
+    expect(params[1]).toEqual(['tag1']);
+    expect(params[2]).toEqual(['EventB']);
+    expect(params[3]).toEqual(['tag2']);
   });
 
-  it("multi-type - both clauses have filters", () => {
-    const q = query.eventsOfType("A").where.key("k").equals("v").eventsOfType("B").where.key("k2").equals("v2");
-    const { sql, params } = compileLoadQuery(q);
-    expect(params.length).toBe(4);
-    expect(params[0]).toBe("A");
-    expect(params[1]).toBe(JSON.stringify({ k: "v" }));
-    expect(params[2]).toBe("B");
-    expect(params[3]).toBe(JSON.stringify({ k2: "v2" }));
-    expect(sql).toContain("WHERE ((type = $1 AND payload @> $2::jsonb) OR (type = $3 AND payload @> $4::jsonb))");
-  });
-
-  it("parameter numbering - no gaps, no duplicates", () => {
-    const q = query.eventsOfType("T").where.key("a").equals(1).and.key("b").equals(2);
-    const { sql, params } = compileLoadQuery(q);
-    expect(params.length).toBe(3);
-    expect(params[0]).toBe("T");
-    expect(params[1]).toBe(JSON.stringify({ a: 1 }));
-    expect(params[2]).toBe(JSON.stringify({ b: 2 }));
-    expect(sql).toContain("$1");
-    expect(sql).toContain("$3");
-    expect(sql).not.toContain("$4");
-  });
-
-  it("value serialization - null, 0, false", () => {
-    const cases: Array<[unknown, string]> = [
-      [null, JSON.stringify({ key: null })],
-      [0, JSON.stringify({ key: 0 })],
-      [false, JSON.stringify({ key: false })],
-    ];
-    for (const [val, expected] of cases) {
-      const { params } = compileLoadQuery(query.eventsOfType("T").where.key("key").equals(val));
-      expect(params[1]).toBe(expected);
-    }
-  });
-
-  it("value serialization - nested object", () => {
-    const { params } = compileLoadQuery(query.eventsOfType("T").where.key("key").equals({ nested: true }));
-    expect(params[1]).toBe(JSON.stringify({ key: { nested: true } }));
-  });
-
-});
-
-describe("compileVersionCheckQuery", () => {
-  it("starts with COALESCE(MAX(global_position), 0) AS max_pos", () => {
-    const { sql } = compileVersionCheckQuery(query.eventsOfType("X"));
-    expect(sql).toContain("SELECT COALESCE(MAX(global_position), 0) AS max_pos");
-  });
-
-  it("does NOT contain ORDER BY", () => {
-    const { sql } = compileVersionCheckQuery(query.eventsOfType("X"));
-    expect(sql).not.toContain("ORDER BY");
-  });
-
-  it("does NOT contain SELECT global_position, event_id", () => {
-    const { sql } = compileVersionCheckQuery(query.eventsOfType("X"));
-    expect(sql).not.toContain("SELECT global_position, event_id");
-  });
-
-  it("has correct WHERE clause", () => {
-    const { sql, params } = compileVersionCheckQuery(query.eventsOfType("MyEvent"));
-    expect(params).toEqual(["MyEvent"]);
-    expect(sql).toContain("WHERE type = $1");
+  it('combines type and tags with AND within an item', () => {
+    const q = queryItem({ types: ['EventA'], tags: ['tag1'] });
+    const { sql } = compileLoadQuery(q);
+    
+    expect(sql).toMatch(/type = ANY.*AND.*tags @>/);
   });
 });
 
-describe("compileStreamQuery", () => {
-  it("appends AND global_position and LIMIT", () => {
-    const q = query.eventsOfType("OrderCreated");
-    const { sql, params } = compileStreamQuery(q, 10n, 50);
-    expect(params).toEqual(["OrderCreated", 10n, 50]);
-    expect(sql).toContain("AND global_position > $2");
-    expect(sql).toContain("LIMIT $3");
-    expect(sql).toContain("ORDER BY global_position ASC");
-  });
-
-  it("paramOffset shifts param numbering", () => {
-    const { sql, params } = compileStreamQuery(query.eventsOfType("X"), 0n, 100, 2);
-    expect(params).toEqual(["X", 0n, 100]);
-    expect(sql).toContain("type = $3");
-    expect(sql).toContain("global_position > $4");
-    expect(sql).toContain("LIMIT $5");
-  });
-
-  it("contains SELECT columns and FROM events", () => {
-    const { sql } = compileStreamQuery(query.eventsOfType("E"), 0n, 10);
-    expect(sql).toContain("SELECT global_position, event_id, type, payload, metadata, occurred_at");
-    expect(sql).toContain("FROM events");
+describe('compileVersionCheckQuery()', () => {
+  it('compiles to COALESCE(MAX(global_position), 0)', () => {
+    const q = queryItem({ types: ['EventA'] });
+    const { sql, params } = compileVersionCheckQuery(q);
+    
+    expect(sql).toContain('SELECT COALESCE(MAX(global_position), 0) AS max_pos');
+    expect(sql).toContain('FROM events');
+    expect(sql).toContain('WHERE');
+    expect(sql).not.toContain('ORDER BY');
+    expect(params).toEqual([['EventA']]);
   });
 });
 
-describe("compileCanonicalKey", () => {
-  it("same query produces the same key", () => {
-    const q1 = query.eventsOfType("OrderCreated").where.key("customerId").equals("c1");
-    const q2 = query.eventsOfType("OrderCreated").where.key("customerId").equals("c1");
-    expect(compileCanonicalKey(q1)).toBe(compileCanonicalKey(q2));
+describe('compileStreamQuery()', () => {
+  it('includes position and limit parameters', () => {
+    const q = queryItem({ types: ['EventA'] });
+    const { sql, params } = compileStreamQuery(q, 100n, 50);
+    
+    expect(sql).toContain('global_position > $2');
+    expect(sql).toContain('LIMIT $3');
+    expect(params).toHaveLength(3);
+    expect(params[0]).toEqual(['EventA']);
+    expect(params[1]).toBe(100n);
+    expect(params[2]).toBe(50);
   });
 
-  it("different type name produces different key", () => {
-    expect(compileCanonicalKey(query.eventsOfType("A"))).not.toBe(compileCanonicalKey(query.eventsOfType("B")));
+  it('orders by global_position ASC', () => {
+    const q = queryAll();
+    const { sql } = compileStreamQuery(q, 0n, 100);
+    
+    expect(sql).toContain('ORDER BY global_position ASC');
+  });
+});
+
+describe('compileExistsQuery()', () => {
+  it('compiles to EXISTS subquery without after', () => {
+    const q = queryItem({ types: ['EventA'] });
+    const { sql, params } = compileExistsQuery(q);
+    
+    expect(sql).toContain('SELECT EXISTS');
+    expect(sql).toContain('SELECT 1');
+    expect(sql).toContain('LIMIT 1');
+    expect(sql).not.toContain('global_position >');
+    expect(params).toEqual([['EventA']]);
   });
 
-  it("different filter value produces different key", () => {
-    const qa = query.eventsOfType("T").where.key("k").equals("v1");
-    const qb = query.eventsOfType("T").where.key("k").equals("v2");
-    expect(compileCanonicalKey(qa)).not.toBe(compileCanonicalKey(qb));
+  it('includes position constraint when after is specified', () => {
+    const q = queryItem({ types: ['EventA'] });
+    const { sql, params } = compileExistsQuery(q, 42n);
+    
+    expect(sql).toContain('global_position > $2');
+    expect(params).toHaveLength(2);
+    expect(params[1]).toBe(42n);
+  });
+});
+
+describe('extractLockPairs()', () => {
+  it('extracts all (type, tag) combinations from query', () => {
+    const q = query([
+      { types: ['EventA'], tags: ['tag1', 'tag2'] },
+    ]);
+    const pairs = extractLockPairs(q);
+    
+    expect(pairs).toHaveLength(2);
+    expect(pairs).toContainEqual({ type: 'EventA', tag: 'tag1' });
+    expect(pairs).toContainEqual({ type: 'EventA', tag: 'tag2' });
   });
 
-  it("stable across multiple calls", () => {
-    const q = query.eventsOfType("OrderCreated").where.key("customerId").equals("c1");
-    const key = compileCanonicalKey(q);
-    expect(compileCanonicalKey(q)).toBe(key);
-    expect(compileCanonicalKey(q)).toBe(key);
+  it('uses "*" for empty types (any type)', () => {
+    const q = queryItem({ tags: ['tag1'] });
+    const pairs = extractLockPairs(q);
+    
+    expect(pairs).toHaveLength(1);
+    expect(pairs[0]).toEqual({ type: '*', tag: 'tag1' });
   });
 
-  it("multi-clause queries - clauses sorted alphabetically by type", () => {
-    const qAB = query.eventsOfType("A").eventsOfType("B");
-    const qBA = query.eventsOfType("B").eventsOfType("A");
-    expect(compileCanonicalKey(qAB)).toBe(compileCanonicalKey(qBA));
+  it('uses "" for empty tags', () => {
+    const q = queryItem({ types: ['EventA'] });
+    const pairs = extractLockPairs(q);
+    
+    expect(pairs).toHaveLength(1);
+    expect(pairs[0]).toEqual({ type: 'EventA', tag: '' });
   });
 
-  it("multi-clause with filters - sorted alphabetically", () => {
-    const qXY = query.eventsOfType("X").where.key("id").equals("1").eventsOfType("Y").where.key("id").equals("2");
-    const qYX = query.eventsOfType("Y").where.key("id").equals("2").eventsOfType("X").where.key("id").equals("1");
-    expect(compileCanonicalKey(qXY)).toBe(compileCanonicalKey(qYX));
+  it('handles queryAll (any type, no tags)', () => {
+    const q = queryAll();
+    const pairs = extractLockPairs(q);
+    
+    expect(pairs).toHaveLength(1);
+    expect(pairs[0]).toEqual({ type: '*', tag: '' });
+  });
+
+  it('sorts pairs deterministically (type then tag)', () => {
+    const q = query([
+      { types: ['EventB'], tags: ['z'] },
+      { types: ['EventA'], tags: ['b', 'a'] },
+    ]);
+    const pairs = extractLockPairs(q);
+    
+    expect(pairs).toEqual([
+      { type: 'EventA', tag: 'a' },
+      { type: 'EventA', tag: 'b' },
+      { type: 'EventB', tag: 'z' },
+    ]);
+  });
+
+  it('deduplicates pairs', () => {
+    const q = query([
+      { types: ['EventA'], tags: ['tag1'] },
+      { types: ['EventA'], tags: ['tag1'] },
+    ]);
+    const pairs = extractLockPairs(q);
+    
+    expect(pairs).toHaveLength(1);
+    expect(pairs[0]).toEqual({ type: 'EventA', tag: 'tag1' });
+  });
+
+  it('handles multiple types and tags (Cartesian product)', () => {
+    const q = queryItem({ types: ['A', 'B'], tags: ['t1', 't2'] });
+    const pairs = extractLockPairs(q);
+    
+    expect(pairs).toHaveLength(4);
+    expect(pairs).toContainEqual({ type: 'A', tag: 't1' });
+    expect(pairs).toContainEqual({ type: 'A', tag: 't2' });
+    expect(pairs).toContainEqual({ type: 'B', tag: 't1' });
+    expect(pairs).toContainEqual({ type: 'B', tag: 't2' });
   });
 });

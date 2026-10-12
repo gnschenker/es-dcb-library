@@ -5,21 +5,16 @@ CREATE TABLE IF NOT EXISTS events (
   global_position  BIGSERIAL    PRIMARY KEY,
   event_id         UUID         NOT NULL DEFAULT gen_random_uuid() UNIQUE,
   type             VARCHAR(255) NOT NULL,
-  payload          JSONB        NOT NULL,
+  data             JSONB        NOT NULL,
   metadata         JSONB,
   occurred_at      TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
-  tags             TEXT[]       NOT NULL DEFAULT '{}'
+  tags             TEXT[]       NOT NULL
 )
 `.trim();
 
-export const DDL_CREATE_GIN_INDEX = `
-CREATE INDEX IF NOT EXISTS idx_events_payload_gin
-  ON events USING GIN (payload jsonb_path_ops)
-`.trim();
-
-export const DDL_TUNE_GIN_INDEX = `
-ALTER INDEX IF EXISTS idx_events_payload_gin
-  SET (fastupdate = on, gin_pending_list_limit = 65536)
+export const DDL_CREATE_TAGS_INDEX = `
+CREATE INDEX IF NOT EXISTS idx_events_tags_gin
+  ON events USING GIN (tags array_ops)
 `.trim();
 
 export const DDL_CREATE_TYPE_POSITION_INDEX = `
@@ -41,24 +36,10 @@ ALTER TABLE events SET (
 )
 `.trim();
 
-export const DDL_ADD_TAGS_COLUMN = `
-ALTER TABLE events ADD COLUMN IF NOT EXISTS tags TEXT[] NOT NULL DEFAULT '{}'
-`.trim();
-
-export const DDL_CREATE_TAGS_INDEX = `
-CREATE INDEX IF NOT EXISTS idx_events_tags_gin
-  ON events USING GIN (tags array_ops)
-`.trim();
-
 export async function applySchema(client: pg.ClientBase): Promise<void> {
   await client.query(DDL_CREATE_TABLE);
-  await client.query(DDL_CREATE_GIN_INDEX);
-  await client.query(DDL_TUNE_GIN_INDEX);
+  await client.query(DDL_CREATE_TAGS_INDEX);
   await client.query(DDL_CREATE_TYPE_POSITION_INDEX);
   await client.query(DDL_CREATE_BRIN_INDEX);
   await client.query(DDL_TUNE_AUTOVACUUM);
-  
-  // Migration-safe: add tags column if it doesn't exist (for existing databases)
-  await client.query(DDL_ADD_TAGS_COLUMN);
-  await client.query(DDL_CREATE_TAGS_INDEX);
 }

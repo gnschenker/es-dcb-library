@@ -1,5 +1,5 @@
 import type pg from 'pg';
-import type { QueryDefinition } from '../query/types.js';
+import type { Query } from '../query/types.js';
 import type { StoredEvent } from '../types.js';
 
 /**
@@ -32,9 +32,9 @@ export interface ProjectionDefinition {
 
   /**
    * The subset of events this projection cares about.
-   * Uses the existing query DSL. Must have at least one clause.
+   * Uses the tag-based query model.
    */
-  readonly query: QueryDefinition;
+  readonly query: Query;
 
   /**
    * Optional: create read-model tables idempotently.
@@ -77,9 +77,9 @@ export function defineProjection(def: ProjectionDefinition): ProjectionDefinitio
       `defineProjection: name "${def.name}" must match /^[a-zA-Z][a-zA-Z0-9\\-_]{0,127}$/`,
     );
   }
-  if (!def.query || !Array.isArray(def.query._clauses) || def.query._clauses.length === 0) {
+  if (!def.query || !Array.isArray(def.query.items) || def.query.items.length === 0) {
     throw new Error(
-      `defineProjection: "${def.name}" must have at least one event type in query`,
+      `defineProjection: "${def.name}" query must have at least one item`,
     );
   }
   return def;
@@ -101,7 +101,7 @@ export function createEventDispatcher(handlers: DispatchHandlers): ProjectionHan
   return async (event: StoredEvent, client: pg.PoolClient): Promise<void> => {
     const h = handlers[event.type];
     if (h !== undefined) {
-      await h(event.payload as Record<string, unknown>, event, client);
+      await h(event.data as Record<string, unknown>, event, client);
     }
   };
 }

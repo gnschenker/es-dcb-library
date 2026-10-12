@@ -1,20 +1,28 @@
 import pg from 'pg';
-import type { QueryDefinition } from '../query/types.js';
-import type { NewEvent, StoredEvent, LoadResult, AppendOptions, StreamOptions, EventStore } from '../types.js';
+import type { Query } from '../query/types.js';
+import type { NewEvent, StoredEvent, LoadResult, AppendCondition, StreamOptions, EventStore, TagExtractor } from '../types.js';
 import { ConcurrencyError, EventStoreError } from '../errors.js';
-import { compileLoadQuery, compileVersionCheckQuery, compileCanonicalKey, compileStreamQuery } from '../query/compiler.js';
+import { compileLoadQuery, compileExistsQuery, compileStreamQuery, extractLockPairs } from '../query/compiler.js';
 import { applySchema } from './schema.js';
 import { mapRow } from './row-mapper.js';
 
 export interface EventStoreConfig {
   pool: pg.Pool;
+  /**
+   * Tag extractors per event type.
+   * Called for each event to derive tags from the event data.
+   * Tags are merged with event.tags (if present) and deduplicated.
+   */
+  tagExtractors?: Record<string, TagExtractor>;
 }
 
 export class PostgresEventStore implements EventStore {
   private readonly pool: pg.Pool;
+  private readonly tagExtractors: Record<string, TagExtractor>;
 
   constructor(config: EventStoreConfig) {
     this.pool = config.pool;
+    this.tagExtractors = config.tagExtractors ?? {};
   }
 
   async initializeSchema(): Promise<void> {
@@ -26,7 +34,7 @@ export class PostgresEventStore implements EventStore {
     }
   }
 
-  async load(query: QueryDefinition): Promise<LoadResult> {
+  async load(query: Query): Promise<LoadResult> {
     const { sql, params } = compileLoadQuery(query);
     let result: pg.QueryResult;
     try {
@@ -41,56 +49,85 @@ export class PostgresEventStore implements EventStore {
     return { events, version };
   }
 
-  async append(events: NewEvent | NewEvent[], options?: AppendOptions): Promise<StoredEvent[]> {
+  async append(events: NewEvent | NewEvent[], condition?: AppendCondition): Promise<StoredEvent[]> {
     const eventList = Array.isArray(events) ? events : [events];
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
 
-      if (options !== undefined) {
-        // Set session-local timeouts (reset automatically on COMMIT/ROLLBACK)
+      if (condition !== undefined) {
+        // Set session-local timeouts
         await client.query("SET LOCAL lock_timeout = '5s'");
         await client.query("SET LOCAL statement_timeout = '30s'");
 
-        // Acquire per-stream advisory lock (non-blocking)
-        const concurrencyTarget = options.concurrencyQuery ?? options.query;
-        const canonicalKey = compileCanonicalKey(concurrencyTarget);
-        const lockResult = await client.query<{ acquired: boolean }>(
-          'SELECT pg_try_advisory_xact_lock(hashtext($1)) AS acquired',
-          [canonicalKey]
-        );
-        const acquired = lockResult.rows[0]!.acquired;
-        if (!acquired) {
-          await client.query('ROLLBACK');
-          throw new ConcurrencyError(
-            options.expectedVersion,
-            options.expectedVersion,
-            'Advisory lock could not be acquired — another writer holds the lock'
-          );
+        // Acquire advisory locks for all (type, tag) pairs in sorted order
+        const lockPairs = extractLockPairs(condition.failIfEventsMatch);
+        for (const { type, tag } of lockPairs) {
+          const lockKey = `${type}:${tag}`;
+          
+          // Try to acquire lock with retry (exponential backoff)
+          let acquired = false;
+          const maxRetries = 3;
+          const delays = [50, 200, 800]; // milliseconds
+          
+          for (let attempt = 0; attempt <= maxRetries; attempt++) {
+            const lockResult = await client.query<{ acquired: boolean }>(
+              'SELECT pg_try_advisory_xact_lock(hashtext($1)) AS acquired',
+              [lockKey]
+            );
+            acquired = lockResult.rows[0]!.acquired;
+            
+            if (acquired) {
+              break;
+            }
+            
+            // If not acquired and we have retries left, wait and try again
+            if (attempt < maxRetries) {
+              await new Promise(resolve => setTimeout(resolve, delays[attempt]));
+            }
+          }
+          
+          if (!acquired) {
+            await client.query('ROLLBACK');
+            throw new ConcurrencyError(
+              condition.after ?? 0n,
+              condition.after ?? 0n,
+              `Advisory lock could not be acquired for ${lockKey} after ${maxRetries} retries`
+            );
+          }
         }
 
-        // Version check
-        const { sql: versionSql, params: versionParams } = compileVersionCheckQuery(concurrencyTarget);
-        const versionResult = await client.query<{ max_pos: string }>(versionSql, versionParams as unknown[]);
-        const actualVersion = BigInt(versionResult.rows[0]!.max_pos);
-        if (actualVersion !== options.expectedVersion) {
+        // Check append condition: fail if any matching event exists after the specified position
+        const { sql: existsSql, params: existsParams } = compileExistsQuery(
+          condition.failIfEventsMatch,
+          condition.after
+        );
+        const existsResult = await client.query<{ exists: boolean }>(existsSql, existsParams as unknown[]);
+        
+        if (existsResult.rows[0]!.exists) {
           await client.query('ROLLBACK');
-          throw new ConcurrencyError(options.expectedVersion, actualVersion);
+          const actualVersion = condition.after ?? 0n; // We don't know the exact version, but we know it's > after
+          throw new ConcurrencyError(
+            condition.after ?? 0n,
+            actualVersion,
+            'Append condition failed: matching events exist after specified position'
+          );
         }
       }
 
       // Insert all events
       const stored: StoredEvent[] = [];
       for (const event of eventList) {
-        // Compute final tags: merge event.tags with tagExtractor output
+        // Compute final tags: merge event.tags with extracted tags
         const eventTags = event.tags ?? [];
-        const extractedTags = options?.tagExtractor ? options.tagExtractor(event) : [];
+        const extractor = this.tagExtractors[event.type];
+        const extractedTags = extractor ? extractor(event) : [];
         const finalTags = [...new Set([...eventTags, ...extractedTags])]; // deduplicate
 
-        const sql = `INSERT INTO events (type, payload, metadata, tags)
+        const sql = `INSERT INTO events (type, data, metadata, tags)
         VALUES ($1, $2::jsonb, $3::jsonb, $4)
-        RETURNING global_position, event_id, type, payload, metadata, occurred_at, tags`.trim();
-        const params = [event.type, event.payload, event.metadata ?? null, finalTags];
+        RETURNING global_position, event_id, type, data, metadata, occurred_at, tags`.trim();
+        const params = [event.type, event.data, event.metadata ?? null, finalTags];
         let result: pg.QueryResult;
         try {
           result = await client.query(sql, params);
@@ -114,7 +151,7 @@ export class PostgresEventStore implements EventStore {
     }
   }
 
-  async *stream(query: QueryDefinition, options: StreamOptions = {}): AsyncGenerator<StoredEvent> {
+  async *stream(query: Query, options: StreamOptions = {}): AsyncGenerator<StoredEvent> {
     const batchSize = options.batchSize ?? 100;
     let lastPosition = options.afterPosition ?? 0n;
 
