@@ -142,7 +142,7 @@ export async function cancelCourse(
         droppedAt: now.toISOString(),
         droppedBy: 'system',
       };
-      unenrollEvents.push({ type: 'StudentDropped', data: data as unknown as Record<string, unknown>, tags: [] } as NewEvent);
+      unenrollEvents.push({ type: 'StudentDropped', data: data as unknown as Record<string, unknown>} as NewEvent);
     } else {
       const data: StudentWithdrewPayload = {
         studentId,
@@ -150,7 +150,7 @@ export async function cancelCourse(
         withdrewAt: now.toISOString(),
         withdrewBy: 'system',
       };
-      unenrollEvents.push({ type: 'StudentWithdrew', data: data as unknown as Record<string, unknown>, tags: [] } as NewEvent);
+      unenrollEvents.push({ type: 'StudentWithdrew', data: data as unknown as Record<string, unknown>} as NewEvent);
     }
   }
 
@@ -161,7 +161,7 @@ export async function cancelCourse(
   };
 
   await store.append(
-    [...unenrollEvents, { type: 'CourseCancelled', data: cancelPayload as unknown as Record<string, unknown>, tags: [] } as NewEvent],
+    [...unenrollEvents, { type: 'CourseCancelled', data: cancelPayload as unknown as Record<string, unknown>} as NewEvent],
     {
       failIfEventsMatch: query([
         ...courseStream(input.courseId).items,

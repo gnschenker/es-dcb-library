@@ -127,7 +127,7 @@ export async function unenrollStudent(
       droppedAt: now.toISOString(),
       droppedBy: input.unenrolledBy,
     };
-    event = { type: 'StudentDropped', data: data as unknown as Record<string, unknown>, tags: [] } as NewEvent;
+    event = { type: 'StudentDropped', data: data as unknown as Record<string, unknown>} as NewEvent;
   } else {
     const data: StudentWithdrewPayload = {
       studentId: input.studentId,
@@ -135,7 +135,7 @@ export async function unenrollStudent(
       withdrewAt: now.toISOString(),
       withdrewBy: input.unenrolledBy,
     };
-    event = { type: 'StudentWithdrew', data: data as unknown as Record<string, unknown>, tags: [] } as NewEvent;
+    event = { type: 'StudentWithdrew', data: data as unknown as Record<string, unknown>} as NewEvent;
   }
 
   await store.append(

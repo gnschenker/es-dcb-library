@@ -139,7 +139,7 @@ export async function removeTeacher(
   };
 
   await store.append(
-    [{ type: 'TeacherRemovedFromCourse', data: data as unknown as Record<string, unknown>, tags: [] } as NewEvent],
+    [{ type: 'TeacherRemovedFromCourse', data: data as unknown as Record<string, unknown>} as NewEvent],
     { failIfEventsMatch: courseStream(input.courseId), after: courseVersion },
   );
 }

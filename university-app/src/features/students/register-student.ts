@@ -44,7 +44,7 @@ export async function registerStudent(
   };
 
   await store.append(
-    [{ type: 'StudentRegistered', data: data as unknown as Record<string, unknown>, tags: [] } as NewEvent],
+    [{ type: 'StudentRegistered', data: data as unknown as Record<string, unknown>} as NewEvent],
     { failIfEventsMatch: studentStream(studentId), after: 0n },
   );
 

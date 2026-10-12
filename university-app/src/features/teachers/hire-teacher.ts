@@ -69,7 +69,7 @@ export async function hireTeacher(
   };
 
   await store.append(
-    [{ type: 'TeacherHired', data: data as unknown as Record<string, unknown>, tags: [] } as NewEvent],
+    [{ type: 'TeacherHired', data: data as unknown as Record<string, unknown>} as NewEvent],
     { failIfEventsMatch: teacherStream(teacherId), after: version },
   );
 

@@ -78,7 +78,7 @@ export async function createCourse(
   };
 
   await store.append(
-    [{ type: 'CourseCreated', data: data as unknown as Record<string, unknown>, tags: [] } as NewEvent],
+    [{ type: 'CourseCreated', data: data as unknown as Record<string, unknown>} as NewEvent],
     { failIfEventsMatch: courseStream(courseId), after: 0n },
   );
 

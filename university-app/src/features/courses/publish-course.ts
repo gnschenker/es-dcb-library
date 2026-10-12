@@ -119,7 +119,7 @@ export async function publishCourse(
   };
 
   await store.append(
-    [{ type: 'CoursePublished', data: data as unknown as Record<string, unknown>, tags: [] } as NewEvent],
+    [{ type: 'CoursePublished', data: data as unknown as Record<string, unknown>} as NewEvent],
     { failIfEventsMatch: courseStream(input.courseId), after: courseVersion },
   );
 }

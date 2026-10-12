@@ -187,7 +187,7 @@ export async function gradeStudent(
 
   await store.append(
     [
-      { type: 'StudentGraded', data: gradedPayload as unknown as Record<string, unknown>, tags: [] } as NewEvent,
+      { type: 'StudentGraded', data: gradedPayload as unknown as Record<string, unknown>} as NewEvent,
       {
         type: passed ? 'StudentPassedCourse' : 'StudentFailedCourse',
         data: outcomePayload as unknown as Record<string, unknown>,

@@ -130,7 +130,7 @@ export async function dismissTeacher(
         teacherId: input.teacherId,
         removedAt: clock.now().toISOString(),
       };
-      removedEvents.push({ type: 'TeacherRemovedFromCourse', data: removedPayload as unknown as Record<string, unknown>, tags: [] } as NewEvent);
+      removedEvents.push({ type: 'TeacherRemovedFromCourse', data: removedPayload as unknown as Record<string, unknown>} as NewEvent);
     }
   }
 
@@ -141,7 +141,7 @@ export async function dismissTeacher(
   };
 
   await store.append(
-    [...removedEvents, { type: 'TeacherDismissed', data: dismissedPayload as unknown as Record<string, unknown>, tags: [] } as NewEvent],
+    [...removedEvents, { type: 'TeacherDismissed', data: dismissedPayload as unknown as Record<string, unknown>} as NewEvent],
     { failIfEventsMatch: teacherStream(input.teacherId), after: version },
   );
 }

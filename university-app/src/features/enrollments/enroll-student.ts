@@ -197,7 +197,7 @@ export async function enrollStudent(
   };
 
   await store.append(
-    [{ type: 'StudentEnrolled', data: data as unknown as Record<string, unknown>, tags: [] } as NewEvent],
+    [{ type: 'StudentEnrolled', data: data as unknown as Record<string, unknown>} as NewEvent],
     {
       failIfEventsMatch: query([
         ...enrollmentStream(input.studentId, input.courseId).items,
