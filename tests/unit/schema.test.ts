@@ -6,6 +6,8 @@ import {
   DDL_CREATE_TYPE_POSITION_INDEX,
   DDL_CREATE_BRIN_INDEX,
   DDL_TUNE_AUTOVACUUM,
+  DDL_ADD_TAGS_COLUMN,
+  DDL_CREATE_TAGS_INDEX,
   applySchema,
 } from '../../src/store/schema.js';
 
@@ -17,6 +19,8 @@ const ALL_DDL = [
   DDL_CREATE_TYPE_POSITION_INDEX,
   DDL_CREATE_BRIN_INDEX,
   DDL_TUNE_AUTOVACUUM,
+  DDL_ADD_TAGS_COLUMN,
+  DDL_CREATE_TAGS_INDEX,
 ].join('\n');
 
 describe('DDL_CREATE_TABLE', () => {
@@ -53,6 +57,12 @@ describe('DDL_CREATE_TABLE', () => {
 
   it('defines occurred_at as TIMESTAMPTZ NOT NULL DEFAULT NOW()', () => {
     expect(DDL_CREATE_TABLE).toMatch(/occurred_at\s+TIMESTAMPTZ\s+NOT NULL\s+DEFAULT NOW\(\)/i);
+  });
+
+  it('defines tags as TEXT[] NOT NULL DEFAULT', () => {
+    expect(DDL_CREATE_TABLE).toContain('tags');
+    expect(DDL_CREATE_TABLE).toContain('TEXT[]');
+    expect(DDL_CREATE_TABLE).toMatch(/tags\s+TEXT\[\]\s+NOT NULL\s+DEFAULT\s+'\{\}'/i);
   });
 });
 
@@ -127,6 +137,38 @@ describe('DDL_TUNE_AUTOVACUUM', () => {
   });
 });
 
+describe('DDL_ADD_TAGS_COLUMN', () => {
+  it('adds tags column if not exists', () => {
+    expect(DDL_ADD_TAGS_COLUMN).toContain('ALTER TABLE events');
+    expect(DDL_ADD_TAGS_COLUMN).toContain('ADD COLUMN IF NOT EXISTS tags');
+  });
+
+  it('defines tags as TEXT[] NOT NULL DEFAULT', () => {
+    expect(DDL_ADD_TAGS_COLUMN).toContain('TEXT[]');
+    expect(DDL_ADD_TAGS_COLUMN).toContain('NOT NULL');
+    expect(DDL_ADD_TAGS_COLUMN).toMatch(/DEFAULT\s+'\{\}'/);
+  });
+});
+
+describe('DDL_CREATE_TAGS_INDEX', () => {
+  it('creates idx_events_tags_gin', () => {
+    expect(DDL_CREATE_TAGS_INDEX).toContain('idx_events_tags_gin');
+  });
+
+  it('uses GIN index type with array_ops', () => {
+    expect(DDL_CREATE_TAGS_INDEX).toContain('GIN');
+    expect(DDL_CREATE_TAGS_INDEX).toContain('array_ops');
+  });
+
+  it('indexes the tags column', () => {
+    expect(DDL_CREATE_TAGS_INDEX).toMatch(/\(\s*tags\s+array_ops\s*\)/);
+  });
+
+  it('uses IF NOT EXISTS', () => {
+    expect(DDL_CREATE_TAGS_INDEX).toContain('IF NOT EXISTS');
+  });
+});
+
 describe('idx_events_type absence', () => {
   it('does NOT create idx_events_type (redundant — covered by type_position)', () => {
     // idx_events_type_position is fine; the standalone idx_events_type must not exist
@@ -136,11 +178,11 @@ describe('idx_events_type absence', () => {
 });
 
 describe('applySchema()', () => {
-  it('calls client.query exactly 6 times', async () => {
+  it('calls client.query exactly 8 times (6 original + 2 for tags)', async () => {
     const mockQuery = vi.fn().mockResolvedValue({ rows: [], rowCount: 0 });
     const mockClient = { query: mockQuery } as unknown as Parameters<typeof applySchema>[0];
     await applySchema(mockClient);
-    expect(mockQuery).toHaveBeenCalledTimes(6);
+    expect(mockQuery).toHaveBeenCalledTimes(8);
   });
 
   it('executes DDL statements in the correct order', async () => {

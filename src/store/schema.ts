@@ -7,7 +7,8 @@ CREATE TABLE IF NOT EXISTS events (
   type             VARCHAR(255) NOT NULL,
   payload          JSONB        NOT NULL,
   metadata         JSONB,
-  occurred_at      TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+  occurred_at      TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+  tags             TEXT[]       NOT NULL DEFAULT '{}'
 )
 `.trim();
 
@@ -40,6 +41,15 @@ ALTER TABLE events SET (
 )
 `.trim();
 
+export const DDL_ADD_TAGS_COLUMN = `
+ALTER TABLE events ADD COLUMN IF NOT EXISTS tags TEXT[] NOT NULL DEFAULT '{}'
+`.trim();
+
+export const DDL_CREATE_TAGS_INDEX = `
+CREATE INDEX IF NOT EXISTS idx_events_tags_gin
+  ON events USING GIN (tags array_ops)
+`.trim();
+
 export async function applySchema(client: pg.ClientBase): Promise<void> {
   await client.query(DDL_CREATE_TABLE);
   await client.query(DDL_CREATE_GIN_INDEX);
@@ -47,4 +57,8 @@ export async function applySchema(client: pg.ClientBase): Promise<void> {
   await client.query(DDL_CREATE_TYPE_POSITION_INDEX);
   await client.query(DDL_CREATE_BRIN_INDEX);
   await client.query(DDL_TUNE_AUTOVACUUM);
+  
+  // Migration-safe: add tags column if it doesn't exist (for existing databases)
+  await client.query(DDL_ADD_TAGS_COLUMN);
+  await client.query(DDL_CREATE_TAGS_INDEX);
 }

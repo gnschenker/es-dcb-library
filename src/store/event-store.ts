@@ -82,10 +82,15 @@ export class PostgresEventStore implements EventStore {
       // Insert all events
       const stored: StoredEvent[] = [];
       for (const event of eventList) {
-        const sql = `INSERT INTO events (type, payload, metadata)
-        VALUES ($1, $2::jsonb, $3::jsonb)
-        RETURNING global_position, event_id, type, payload, metadata, occurred_at`.trim();
-        const params = [event.type, event.payload, event.metadata ?? null];
+        // Compute final tags: merge event.tags with tagExtractor output
+        const eventTags = event.tags ?? [];
+        const extractedTags = options?.tagExtractor ? options.tagExtractor(event) : [];
+        const finalTags = [...new Set([...eventTags, ...extractedTags])]; // deduplicate
+
+        const sql = `INSERT INTO events (type, payload, metadata, tags)
+        VALUES ($1, $2::jsonb, $3::jsonb, $4)
+        RETURNING global_position, event_id, type, payload, metadata, occurred_at, tags`.trim();
+        const params = [event.type, event.payload, event.metadata ?? null, finalTags];
         let result: pg.QueryResult;
         try {
           result = await client.query(sql, params);

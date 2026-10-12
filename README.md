@@ -1,6 +1,6 @@
 # es-dcb-library
 
-A TypeScript event sourcing library implementing the **Dynamic Context Boundaries (DCB)** pattern. Instead of traditional aggregates with fixed, pre-defined boundaries, context is defined dynamically at query time using a fluent DSL. The store is backed by PostgreSQL.
+A TypeScript event sourcing library implementing the **Dynamic Consistency Boundary (DCB)** pattern. Instead of traditional aggregates with fixed, pre-defined boundaries, context is defined dynamically at query time using a fluent DSL. The store is backed by PostgreSQL.
 
 ---
 
@@ -8,7 +8,7 @@ A TypeScript event sourcing library implementing the **Dynamic Context Boundarie
 
 In classical event sourcing, an aggregate is a fixed stream of events identified by a single ID (e.g. `orderId`). The aggregate boundary is defined at design time and cannot change.
 
-**Dynamic Context Boundaries** removes this constraint. A context is defined by a *query* — a set of event types and payload filters evaluated at runtime. The same event may belong to multiple overlapping contexts simultaneously, and the context for any given decision can be composed ad hoc.
+**Dynamic Consistency Boundary** removes this constraint. A context is defined by a *query* — a set of event types and payload filters evaluated at runtime. The same event may belong to multiple overlapping contexts simultaneously, and the context for any given decision can be composed ad hoc.
 
 ```
 Traditional:   load("order", orderId)  →  fixed stream for one aggregate
@@ -215,6 +215,7 @@ interface NewEvent<P = Record<string, unknown>> {
   type: string;
   payload: P;
   metadata?: Record<string, unknown>;
+  tags?: string[];  // Optional event tags
 }
 
 interface StoredEvent<P = Record<string, unknown>> {
@@ -224,10 +225,52 @@ interface StoredEvent<P = Record<string, unknown>> {
   payload: P;
   metadata: Record<string, unknown> | null;
   occurredAt: Date;
+  tags: string[];           // Event tags
 }
 ```
 
 `globalPosition` is always a `bigint`, never a `number`. This avoids precision loss for large stores.
+
+#### Tags
+
+Events can be tagged with arbitrary strings to support flexible partitioning and filtering. Tags are stored as a PostgreSQL `TEXT[]` array and indexed with a GIN index for fast containment queries.
+
+```typescript
+// Append events with tags
+await store.append({
+  type: 'OrderCreated',
+  payload: { orderId: 'o1', customerId: 'c1' },
+  tags: ['order:o1', 'customer:c1'],
+});
+
+// Tags are returned on read
+const { events } = await store.load(someQuery);
+console.log(events[0].tags); // ['order:o1', 'customer:c1']
+```
+
+**Tag Extractor**: You can provide a `tagExtractor` function in `AppendOptions` to derive tags automatically from event payloads. This is useful for applying consistent tagging logic without modifying every call site.
+
+```typescript
+function extractTags(event: NewEvent): string[] {
+  const tags: string[] = [];
+  if (event.type === 'OrderCreated') {
+    tags.push(`order:${event.payload['orderId']}`);
+    tags.push(`customer:${event.payload['customerId']}`);
+  }
+  // ... more logic for other event types
+  return tags;
+}
+
+// Extractor output is merged with event.tags (if present)
+await store.append(
+  { type: 'OrderCreated', payload: { orderId: 'o1', customerId: 'c1' } },
+  { query: q, expectedVersion: version, tagExtractor: extractTags }
+);
+```
+
+Tags specified in the event and tags returned by the extractor are merged and deduplicated before insertion.
+
+**Note**: The current query DSL (`query.eventsOfType().where.key()...`) filters on payload, not tags. Tag-based query support is coming in a future release aligned with the DCB specification.
 
 ---
 

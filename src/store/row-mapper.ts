@@ -7,6 +7,7 @@ export interface EventRow {
   payload: Record<string, unknown>;   // pg auto-parses JSONB
   metadata: Record<string, unknown> | null;
   occurred_at: Date;                  // pg auto-parses TIMESTAMPTZ
+  tags: string[];                     // pg auto-parses TEXT[] arrays
 }
 
 export function mapRow(row: EventRow): StoredEvent {
@@ -17,5 +18,6 @@ export function mapRow(row: EventRow): StoredEvent {
     payload: row.payload,
     metadata: row.metadata,
     occurredAt: row.occurred_at,
+    tags: row.tags,
   };
 }

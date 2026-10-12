@@ -9,6 +9,7 @@ const baseRow: EventRow = {
   payload: { orderId: 'o1', customerId: 'c1' },
   metadata: { correlationId: 'corr-1' },
   occurred_at: new Date('2024-01-01T00:00:00.000Z'),
+  tags: ['order:o1', 'customer:c1'],
 };
 
 describe('mapRow', () => {
@@ -22,6 +23,7 @@ describe('mapRow', () => {
       expect(result).toHaveProperty('payload');
       expect(result).toHaveProperty('metadata');
       expect(result).toHaveProperty('occurredAt');
+      expect(result).toHaveProperty('tags');
     });
 
     it('maps global_position string "42" to BigInt 42n', () => {
@@ -127,6 +129,23 @@ describe('mapRow', () => {
     it('occurredAt is an instance of Date', () => {
       const result = mapRow(baseRow);
       expect(result.occurredAt).toBeInstanceOf(Date);
+    });
+  });
+
+  describe('Tags handling', () => {
+    it('preserves tags array correctly', () => {
+      const result = mapRow({ ...baseRow, tags: ['tag1', 'tag2'] });
+      expect(result.tags).toEqual(['tag1', 'tag2']);
+    });
+
+    it('preserves empty tags array', () => {
+      const result = mapRow({ ...baseRow, tags: [] });
+      expect(result.tags).toEqual([]);
+    });
+
+    it('tags field is always an array (never null or undefined)', () => {
+      const result = mapRow(baseRow);
+      expect(Array.isArray(result.tags)).toBe(true);
     });
   });
 });

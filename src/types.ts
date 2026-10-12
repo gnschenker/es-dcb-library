@@ -4,6 +4,7 @@ export interface NewEvent<P = Record<string, unknown>> {
   type: string;
   payload: P;
   metadata?: Record<string, unknown>;
+  tags?: string[];
 }
 
 export interface StoredEvent<P = Record<string, unknown>> {
@@ -13,6 +14,7 @@ export interface StoredEvent<P = Record<string, unknown>> {
   payload: P;
   metadata: Record<string, unknown> | null;
   occurredAt: Date;
+  tags: string[];
 }
 
 export interface LoadResult {
@@ -24,6 +26,7 @@ export interface AppendOptions {
   query: QueryDefinition;
   expectedVersion: bigint;
   concurrencyQuery?: QueryDefinition;
+  tagExtractor?: (event: NewEvent) => string[];
 }
 
 export interface StreamOptions {

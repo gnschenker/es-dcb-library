@@ -16,6 +16,7 @@ function mockEvent(type: string, payload: Record<string, unknown> = {}): StoredE
     payload,
     metadata: null,
     occurredAt: new Date(),
+    tags: [],
   };
 }
 

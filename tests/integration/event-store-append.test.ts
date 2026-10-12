@@ -27,6 +27,7 @@ describe('PostgresEventStore.append() (integration)', () => {
     expect(stored!.payload).toEqual({ orderId: 'o1' });
     expect(stored!.metadata).toBeNull();
     expect(stored!.occurredAt).toBeInstanceOf(Date);
+    expect(stored!.tags).toEqual([]); // no tags provided
   });
 
   it('appends multiple events with sequential globalPositions', async () => {
@@ -118,5 +119,81 @@ describe('PostgresEventStore.append() (integration)', () => {
       10,
     );
     expect(countAfter).toBe(countBefore);
+  });
+
+  it('appends events with tags and returns them on read', async () => {
+    const [stored] = await store.append({
+      type: 'OrderCreated',
+      payload: { orderId: 'o1' },
+      tags: ['order:o1', 'customer:c1'],
+    });
+    expect(stored!.tags).toEqual(['order:o1', 'customer:c1']);
+  });
+
+  it('tags round-trip correctly through database', async () => {
+    await store.append({
+      type: 'X',
+      payload: {},
+      tags: ['tag1', 'tag2', 'tag3'],
+    });
+    const result = await store.load(query.eventsOfType('X'));
+    expect(result.events[0]!.tags).toEqual(['tag1', 'tag2', 'tag3']);
+  });
+
+  it('tagExtractor derives tags from event payload', async () => {
+    const tagExtractor = (event: { type: string; payload: Record<string, unknown> }) => {
+      if (event.type === 'OrderCreated') {
+        return [`order:${event.payload['orderId']}`, `customer:${event.payload['customerId']}`];
+      }
+      return [];
+    };
+
+    const { events, version } = await store.load(query.eventsOfType('OrderCreated'));
+    const [stored] = await store.append(
+      { type: 'OrderCreated', payload: { orderId: 'o1', customerId: 'c1' } },
+      { query: query.eventsOfType('OrderCreated'), expectedVersion: version, tagExtractor }
+    );
+
+    expect(stored!.tags).toContain('order:o1');
+    expect(stored!.tags).toContain('customer:c1');
+  });
+
+  it('tagExtractor merges with event.tags', async () => {
+    const tagExtractor = (event: { type: string; payload: Record<string, unknown> }) => {
+      return [`extracted:${event.payload['id']}`];
+    };
+
+    const { events, version } = await store.load(query.eventsOfType('X'));
+    const [stored] = await store.append(
+      { type: 'X', payload: { id: '123' }, tags: ['manual:tag'] },
+      { query: query.eventsOfType('X'), expectedVersion: version, tagExtractor }
+    );
+
+    expect(stored!.tags).toContain('extracted:123');
+    expect(stored!.tags).toContain('manual:tag');
+    expect(stored!.tags).toHaveLength(2);
+  });
+
+  it('deduplicates tags from event.tags and tagExtractor', async () => {
+    const tagExtractor = () => ['dup:tag'];
+
+    const { events, version } = await store.load(query.eventsOfType('X'));
+    const [stored] = await store.append(
+      { type: 'X', payload: {}, tags: ['dup:tag', 'unique:tag'] },
+      { query: query.eventsOfType('X'), expectedVersion: version, tagExtractor }
+    );
+
+    expect(stored!.tags).toEqual(['dup:tag', 'unique:tag']); // deduplicated, order may vary
+    expect(stored!.tags.filter(t => t === 'dup:tag')).toHaveLength(1);
+  });
+
+  it('old events without tags read back with empty array', async () => {
+    // Insert an event directly without tags (simulating old schema)
+    await pool.query(
+      `INSERT INTO events (type, payload, metadata) VALUES ('OldEvent', '{}', null)`
+    );
+
+    const result = await store.load(query.eventsOfType('OldEvent'));
+    expect(result.events[0]!.tags).toEqual([]);
   });
 });

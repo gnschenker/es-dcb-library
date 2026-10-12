@@ -78,7 +78,7 @@ export function compileLoadQuery(query: QueryDefinition): CompiledQuery {
   const whereClause = compileWhereClause(query, params, counter);
 
   const sql = [
-    'SELECT global_position, event_id, type, payload, metadata, occurred_at',
+    'SELECT global_position, event_id, type, payload, metadata, occurred_at, tags',
     'FROM events',
     whereClause,
     'ORDER BY global_position ASC',
@@ -132,7 +132,7 @@ export function compileStreamQuery(
   const limitRef = `$${counter.n}`;
 
   const sql = [
-    'SELECT global_position, event_id, type, payload, metadata, occurred_at',
+    'SELECT global_position, event_id, type, payload, metadata, occurred_at, tags',
     'FROM events',
     `${whereClause} AND global_position > ${positionRef}`,
     'ORDER BY global_position ASC',
