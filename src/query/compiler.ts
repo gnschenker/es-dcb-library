@@ -254,6 +254,56 @@ export function compileExistsQuery(
 }
 
 /**
+ * Any row with `tags @> {tag}` that invalidates the append cursor on the shared tag stream.
+ * Uses `global_position` ordering (not `(tx_id, global_position)`), so multi-clause loads
+ * are not confused by tuple ordering across unrelated types on the same tag.
+ */
+export function compileStreamTagExistsQuery(
+  tag: string,
+  after?: StreamCursor,
+  options: ExistsQueryOptions = {},
+): CompiledQuery {
+  const params: unknown[] = [tag];
+  const counter = { n: 1 };
+  const lateCommitHoles = options.lateCommitHoles ?? true;
+
+  let positionClause = '';
+  if (after !== undefined) {
+    params.push(after.globalPosition);
+    counter.n += 1;
+    const afterPosRef = `$${counter.n}`;
+
+    if (lateCommitHoles && after.readXmin !== undefined) {
+      params.push(after.readXmin);
+      counter.n += 1;
+      const readXminRef = `$${counter.n}`;
+      positionClause =
+        ` AND (global_position > ${afterPosRef}` +
+        ` OR (${afterPosRef} > 0 AND global_position < ${afterPosRef} AND tx_id >= ${readXminRef}::xid8))`;
+    } else {
+      positionClause = ` AND global_position > ${afterPosRef}`;
+    }
+  }
+
+  const sql = [
+    'SELECT EXISTS (',
+    '  SELECT 1',
+    '  FROM events',
+    '  WHERE tags @> $1',
+    `${positionClause}`,
+    '  LIMIT 1',
+    ') AS exists',
+  ].join('\n');
+
+  return { sql, params };
+}
+
+/** Distinct non-empty tags referenced by a query’s lock pairs. */
+export function streamTagsFromQuery(query: Query): string[] {
+  return [...new Set(extractLockPairs(query).map((p) => p.tag).filter((t) => t !== ''))];
+}
+
+/**
  * Extracts all (type, tag) pairs from a Query for locking.
  * Returns pairs in sorted order to prevent deadlocks.
  * 

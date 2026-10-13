@@ -13,6 +13,8 @@ import {
   extractLockPairsFromEvents,
   mergeLockPairs,
   withWildcardTagLocks,
+  compileStreamTagExistsQuery,
+  streamTagsFromQuery,
 } from '../query/compiler.js';
 import { resolveAppendEvents, type ResolvedAppendEvent } from './resolve-event-tags.js';
 import { applySchema } from './schema.js';
@@ -145,13 +147,8 @@ export class PostgresEventStore implements EventStore {
           await acquireLocks();
         }
 
-        const { sql: existsSql, params: existsParams } = compileExistsQuery(
-          condition.failIfEventsMatch,
-          condition.after,
-        );
-        const existsResult = await client.query<{ exists: boolean }>(existsSql, existsParams as unknown[]);
-
-        if (existsResult.rows[0]!.exists) {
+        const conditionViolated = await this.appendConditionViolated(client, condition);
+        if (conditionViolated) {
           const { sql: tailSql, params: tailParams } = compileTailCommittedCursorQuery(
             condition.failIfEventsMatch,
           );
@@ -251,5 +248,28 @@ export class PostgresEventStore implements EventStore {
 
   async close(): Promise<void> {
     await this.pool.end();
+  }
+
+  private async appendConditionViolated(
+    client: pg.PoolClient,
+    condition: AppendCondition,
+  ): Promise<boolean> {
+    const { sql, params } = compileExistsQuery(condition.failIfEventsMatch, condition.after);
+    const failIfResult = await client.query<{ exists: boolean }>(sql, params as unknown[]);
+    if (failIfResult.rows[0]!.exists) {
+      return true;
+    }
+
+    for (const tag of streamTagsFromQuery(condition.failIfEventsMatch)) {
+      const tagExists = compileStreamTagExistsQuery(tag, condition.after, { lateCommitHoles: true });
+      const tagResult = await client.query<{ exists: boolean }>(
+        tagExists.sql,
+        tagExists.params as unknown[],
+      );
+      if (tagResult.rows[0]!.exists) {
+        return true;
+      }
+    }
+    return false;
   }
 }

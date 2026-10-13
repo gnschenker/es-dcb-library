@@ -9,6 +9,8 @@ import {
   compileStreamQuery,
   compileCommittedStreamQuery,
   compileExistsQuery,
+  compileStreamTagExistsQuery,
+  streamTagsFromQuery,
   extractLockPairs,
 } from '../../src/query/compiler.js';
 import { query, queryAll, queryItem } from '../../src/query/builder.js';
@@ -251,6 +253,27 @@ describe('mergeLockPairs()', () => {
       { type: 'EventAlpha', tag: 't' },
       { type: 'EventBeta', tag: 't' },
     ]);
+  });
+});
+
+describe('compileStreamTagExistsQuery()', () => {
+  it('uses global_position for tag stream invalidation', () => {
+    const { sql, params } = compileStreamTagExistsQuery('my-tag', {
+      txId: '1',
+      globalPosition: 5n,
+      readXmin: '99',
+    });
+    expect(sql).toContain('tags @> $1');
+    expect(sql).toContain('global_position > $2');
+    expect(sql).toContain('global_position < $2');
+    expect(sql).not.toContain('tx_id, global_position');
+    expect(params).toEqual(['my-tag', 5n, '99']);
+  });
+});
+
+describe('streamTagsFromQuery()', () => {
+  it('returns distinct tags from lock pairs', () => {
+    expect(streamTagsFromQuery(queryItem({ types: ['A'], tags: ['t1', 't2'] }))).toEqual(['t1', 't2']);
   });
 });
 
