@@ -268,7 +268,9 @@ export class PostgresEventStore implements EventStore {
 
     const streamTags = [...new Set(lockPairs.map((p) => p.tag).filter((t) => t !== ''))];
     for (const tag of streamTags) {
-      const tagExists = compileExistsQuery(queryItem({ tags: [tag] }), condition.after);
+      const tagExists = compileExistsQuery(queryItem({ tags: [tag] }), condition.after, {
+        lateCommitHoles: false,
+      });
       const tagResult = await client.query<{ exists: boolean }>(
         tagExists.sql,
         tagExists.params as unknown[],

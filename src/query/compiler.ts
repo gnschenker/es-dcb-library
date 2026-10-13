@@ -203,10 +203,21 @@ export function compileCommittedStreamQuery(
  * - strictly after `(tx_id, global_position)`, or
  * - with `global_position` less than the watermark (late commit of an older transaction).
  */
-export function compileExistsQuery(query: Query, after?: StreamCursor): CompiledQuery {
+export interface ExistsQueryOptions {
+  /** Detect late commits below the watermark (uses `after.readXmin`). Default true. */
+  lateCommitHoles?: boolean;
+}
+
+export function compileExistsQuery(
+  query: Query,
+  after?: StreamCursor,
+  options: ExistsQueryOptions = {},
+): CompiledQuery {
   const params: unknown[] = [];
   const counter = { n: 0 };
   const whereClause = compileWhereClause(query, params, counter);
+
+  const lateCommitHoles = options.lateCommitHoles ?? true;
 
   let positionClause = '';
   if (after !== undefined) {
@@ -218,7 +229,7 @@ export function compileExistsQuery(query: Query, after?: StreamCursor): Compiled
     counter.n += 1;
     const afterPosRef = `$${counter.n}`;
 
-    if (after.readXmin !== undefined) {
+    if (lateCommitHoles && after.readXmin !== undefined) {
       params.push(after.readXmin);
       counter.n += 1;
       const readXminRef = `$${counter.n}`;
