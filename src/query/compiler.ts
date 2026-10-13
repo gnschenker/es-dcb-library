@@ -258,31 +258,17 @@ export function compileExistsQuery(
  * Uses `global_position` ordering (not `(tx_id, global_position)`), so multi-clause loads
  * are not confused by tuple ordering across unrelated types on the same tag.
  */
-export function compileStreamTagExistsQuery(
-  tag: string,
-  after?: StreamCursor,
-  options: ExistsQueryOptions = {},
-): CompiledQuery {
+export function compileStreamTagExistsQuery(tag: string, after?: StreamCursor): CompiledQuery {
   const params: unknown[] = [[tag]];
   const counter = { n: 1 };
-  const lateCommitHoles = options.lateCommitHoles ?? true;
 
   let positionClause = '';
   if (after !== undefined) {
     params.push(after.globalPosition);
     counter.n += 1;
     const afterPosRef = `$${counter.n}`;
-
-    if (lateCommitHoles && after.readXmin !== undefined) {
-      params.push(after.readXmin);
-      counter.n += 1;
-      const readXminRef = `$${counter.n}`;
-      positionClause =
-        ` AND (global_position > ${afterPosRef}` +
-        ` OR (${afterPosRef} > 0 AND global_position < ${afterPosRef} AND tx_id >= ${readXminRef}::xid8))`;
-    } else {
-      positionClause = ` AND global_position > ${afterPosRef}`;
-    }
+    // Position-only: avoids false conflicts on multi-tag loads (tuple / xmin holes stay on failIf exists).
+    positionClause = ` AND global_position > ${afterPosRef}`;
   }
 
   const sql = [
