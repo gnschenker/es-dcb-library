@@ -107,14 +107,14 @@ describe('DCB correctness — P0 adversarial', () => {
           await clientB.query('COMMIT');
 
           // Committed-only load may see no rows while clientA is still open (B can be above xmin).
-          const { events: atLoad, position } = await store.load(streamQuery);
+          const { events: eventsAtLoad, position } = await store.load(streamQuery);
 
           await clientA.query('COMMIT');
 
           const afterHole = await store.load(streamQuery);
           expect(afterHole.events.some((e) => e.type === 'TxHoleA')).toBe(true);
 
-          expect(atLoad.events.length).toBeLessThan(2);
+          expect(eventsAtLoad.length).toBeLessThan(2);
 
           await expect(
             store.append(
