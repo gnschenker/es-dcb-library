@@ -80,7 +80,11 @@ describe('createAppendTelemetry', () => {
 
     await expect(
       telemetry.runAppend([{ type: 'E', data: {}, tags: ['t'] }], undefined, async () => {
-        throw new ConcurrencyError(0n, 1n, 'conflict');
+        throw new ConcurrencyError(
+          STREAM_CURSOR_ORIGIN,
+          { txId: '1', globalPosition: 1n },
+          'conflict',
+        );
       }),
     ).rejects.toBeInstanceOf(ConcurrencyError);
 
@@ -98,7 +102,7 @@ describe('createAppendTelemetry', () => {
 
     await telemetry.runAppend(
       [{ type: 'E', data: {}, tags: ['x'] }],
-      { failIfEventsMatch: { items: [{ types: ['E'], tags: ['x'] }] }, after: 0n },
+      { failIfEventsMatch: { items: [{ types: ['E'], tags: ['x'] }] }, after: STREAM_CURSOR_ORIGIN },
       async (hooks) => {
         await hooks.runAcquireLocks(2, acquire);
         hooks.onEventsStored([]);

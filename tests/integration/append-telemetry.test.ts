@@ -54,7 +54,7 @@ describe('append OpenTelemetry (integration)', () => {
     await expect(
       store.append(
         { type: 'OrderCreated', data: {}, tags: ['order:o1'] },
-        { failIfEventsMatch: q, after: 0n },
+        { failIfEventsMatch: q, after: STREAM_CURSOR_ORIGIN },
       ),
     ).rejects.toThrow(/Append condition failed/);
 
