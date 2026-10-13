@@ -1,5 +1,6 @@
 import pg from 'pg';
 import type { Query } from '../query/types.js';
+import { queryItem } from '../query/builder.js';
 import type { NewEvent, StoredEvent, LoadResult, AppendCondition, StreamOptions, EventStore, TagExtractor } from '../types.js';
 import { UNTAGGED } from '../types.js';
 import { ConcurrencyError, EventStoreError, MissingTagExtractorError } from '../errors.js';
@@ -145,13 +146,13 @@ export class PostgresEventStore implements EventStore {
           await acquireLocks();
         }
 
-        const { sql: existsSql, params: existsParams } = compileExistsQuery(
-          condition.failIfEventsMatch,
-          condition.after,
+        const appendExists = await this.queryAppendConditionExists(
+          client,
+          condition,
+          lockPairs,
         );
-        const existsResult = await client.query<{ exists: boolean }>(existsSql, existsParams as unknown[]);
 
-        if (existsResult.rows[0]!.exists) {
+        if (appendExists) {
           const { sql: tailSql, params: tailParams } = compileTailCommittedCursorQuery(
             condition.failIfEventsMatch,
           );
@@ -251,5 +252,31 @@ export class PostgresEventStore implements EventStore {
 
   async close(): Promise<void> {
     await this.pool.end();
+  }
+
+  /** True when failIfEventsMatch or any locked stream tag has events after the cursor. */
+  private async queryAppendConditionExists(
+    client: pg.PoolClient,
+    condition: AppendCondition,
+    lockPairs: Array<{ type: string; tag: string }>,
+  ): Promise<boolean> {
+    const { sql, params } = compileExistsQuery(condition.failIfEventsMatch, condition.after);
+    const failIfResult = await client.query<{ exists: boolean }>(sql, params as unknown[]);
+    if (failIfResult.rows[0]!.exists) {
+      return true;
+    }
+
+    const streamTags = [...new Set(lockPairs.map((p) => p.tag).filter((t) => t !== ''))];
+    for (const tag of streamTags) {
+      const tagExists = compileExistsQuery(queryItem({ tags: [tag] }), condition.after);
+      const tagResult = await client.query<{ exists: boolean }>(
+        tagExists.sql,
+        tagExists.params as unknown[],
+      );
+      if (tagResult.rows[0]!.exists) {
+        return true;
+      }
+    }
+    return false;
   }
 }
