@@ -13,13 +13,14 @@ import {
   extractLockPairsFromEvents,
   mergeLockPairs,
 } from '../query/compiler.js';
-import { resolveAppendEvents } from './resolve-event-tags.js';
+import { resolveAppendEvents, type ResolvedAppendEvent } from './resolve-event-tags.js';
 import { applySchema } from './schema.js';
 import { mapRow } from './row-mapper.js';
 import { STREAM_CURSOR_ORIGIN } from '../types.js';
 import type { StreamCursor } from '../types.js';
 import { createObservability, type DcbObservability } from '../observability/index.js';
 import type { ObservabilityConfig } from '../observability/index.js';
+import { createAppendTelemetry, type AppendTelemetry } from '../observability/append-telemetry.js';
 
 export interface EventStoreConfig {
   pool: pg.Pool;
@@ -32,7 +33,7 @@ export interface EventStoreConfig {
    * Tag extractors per event type.
    * Called for each event to derive tags from the event data.
    * Tags are merged with event.tags (if present) and deduplicated.
-   * 
+   *
    * Use the UNTAGGED symbol to mark event types that are intentionally untagged:
    * @example
    * tagExtractors: {
@@ -46,13 +47,16 @@ export interface EventStoreConfig {
 export class PostgresEventStore implements EventStore {
   private readonly pool: pg.Pool;
   private readonly tagExtractors: Record<string, TagExtractor | typeof UNTAGGED>;
-  /** Reserved for append/load/stream instrumentation (P-OTel-02+). */
   private readonly observability: DcbObservability;
+  private readonly appendTelemetry: AppendTelemetry | undefined;
 
   constructor(config: EventStoreConfig) {
     this.pool = config.pool;
     this.tagExtractors = config.tagExtractors ?? {};
     this.observability = createObservability(config.observability);
+    this.appendTelemetry = this.observability.enabled
+      ? createAppendTelemetry(this.observability)
+      : undefined;
   }
 
   async initializeSchema(): Promise<void> {
@@ -97,12 +101,27 @@ export class PostgresEventStore implements EventStore {
   async append(events: NewEvent | NewEvent[], condition?: AppendCondition): Promise<StoredEvent[]> {
     const eventList = Array.isArray(events) ? events : [events];
     const resolved = resolveAppendEvents(eventList, this.tagExtractors);
+    const run = () => this.appendToDatabase(resolved, condition);
+    if (this.appendTelemetry === undefined) {
+      return run();
+    }
+    return this.appendTelemetry.runAppend(eventList, condition, async (hooks) => {
+      const stored = await this.appendToDatabase(resolved, condition, hooks);
+      hooks.onEventsStored(stored);
+      return stored;
+    });
+  }
+
+  private async appendToDatabase(
+    resolved: ResolvedAppendEvent[],
+    condition: AppendCondition | undefined,
+    hooks?: { runAcquireLocks: (pairCount: number, acquire: () => Promise<void>) => Promise<void> },
+  ): Promise<StoredEvent[]> {
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
 
       if (condition !== undefined) {
-        // Set session-local timeouts
         await client.query("SET LOCAL lock_timeout = '5s'");
         await client.query("SET LOCAL statement_timeout = '30s'");
 
@@ -110,9 +129,17 @@ export class PostgresEventStore implements EventStore {
           extractLockPairs(condition.failIfEventsMatch),
           extractLockPairsFromEvents(resolved.map((r) => ({ type: r.event.type, tags: r.tags }))),
         );
-        for (const { type, tag } of lockPairs) {
-          const lockKey = `${type}:${tag}`;
-          await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [lockKey]);
+        const acquireLocks = async () => {
+          for (const { type, tag } of lockPairs) {
+            const lockKey = `${type}:${tag}`;
+            await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [lockKey]);
+          }
+        };
+
+        if (hooks !== undefined) {
+          await hooks.runAcquireLocks(lockPairs.length, acquireLocks);
+        } else {
+          await acquireLocks();
         }
 
         const { sql: existsSql, params: existsParams } = compileExistsQuery(
