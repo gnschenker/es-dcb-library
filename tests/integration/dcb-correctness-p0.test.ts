@@ -64,7 +64,8 @@ describe('DCB correctness — P0 adversarial', () => {
           try {
             await store.append(
               { type, data: { side } },
-              { failIfEventsMatch: q, after: positions[side] },
+              // Shared stream guard: typed `q` still drives lock pairs; stream query detects cross-type races.
+              { failIfEventsMatch: streamQuery, after: positions[side] },
             );
             return 'success';
           } catch (err) {
