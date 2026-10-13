@@ -261,8 +261,10 @@ export class PostgresEventStore implements EventStore {
       return true;
     }
 
-    for (const tag of streamTagsFromQuery(condition.failIfEventsMatch)) {
-      const tagExists = compileStreamTagExistsQuery(tag, condition.after);
+    const streamTags = streamTagsFromQuery(condition.failIfEventsMatch);
+    // Multi-tag conditions (e.g. combineQueries): per-tag position checks are unsound; failIf + locks suffice.
+    if (streamTags.length === 1) {
+      const tagExists = compileStreamTagExistsQuery(streamTags[0]!, condition.after);
       const tagResult = await client.query<{ exists: boolean }>(
         tagExists.sql,
         tagExists.params as unknown[],
