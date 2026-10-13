@@ -51,7 +51,7 @@ await store.append(evt, { failIfEventsMatch: q, after: STREAM_CURSOR_ORIGIN });
 
 `append()` now locks the **union** of `(type, tag)` pairs from `failIfEventsMatch` **and** from the events being appended (resolved tags), plus **`(*, tag)`** for each distinct tag (serializes writers on the same tag even when event types differ).
 
-When `failIfEventsMatch` references **exactly one** tag, append also checks for rows with that tag and `global_position > after.globalPosition` (guards cross-type races on a shared tag). Multi-tag conditions rely on typed `failIfEventsMatch` + locks only. Late-commit holes use `readXmin` on the typed exists check.
+When `failIfEventsMatch` is a **single item on one tag**, append also checks for any row with that tag and `global_position > after.globalPosition` (cross-type races). Multi-item or multi-tag conditions use typed `failIfEventsMatch` + locks only. Late-commit holes use `readXmin` on the typed exists check.
 
 ## Unchanged
 
