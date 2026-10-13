@@ -266,7 +266,13 @@ export class PostgresEventStore implements EventStore {
       return true;
     }
 
-    const streamTags = [...new Set(lockPairs.map((p) => p.tag).filter((t) => t !== ''))];
+    const streamTags = [
+      ...new Set(
+        extractLockPairs(condition.failIfEventsMatch)
+          .map((p) => p.tag)
+          .filter((t) => t !== ''),
+      ),
+    ];
     for (const tag of streamTags) {
       const tagExists = compileExistsQuery(queryItem({ tags: [tag] }), condition.after, {
         lateCommitHoles: false,
