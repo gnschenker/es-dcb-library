@@ -49,7 +49,7 @@ await store.append(evt, { failIfEventsMatch: q, after: STREAM_CURSOR_ORIGIN });
 
 ## Advisory locks (P0 #1)
 
-`append()` now locks the **union** of `(type, tag)` pairs from `failIfEventsMatch` **and** from the events being appended (resolved tags).
+`append()` now locks the **union** of `(type, tag)` pairs from `failIfEventsMatch` **and** from the events being appended (resolved tags), plus **`(*, tag)`** for each distinct tag (serializes writers on the same tag even when event types differ).
 
 ## Unchanged
 

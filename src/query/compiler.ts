@@ -316,3 +316,15 @@ export function mergeLockPairs(
   const result = Array.from(pairs).map((s) => JSON.parse(s) as { type: string; tag: string });
   return sortLockPairs(result);
 }
+
+/**
+ * Adds `('*', tag)` for every distinct tag so writers sharing a tag serialize
+ * even when their failIfEventsMatch / event types differ.
+ */
+export function withWildcardTagLocks(
+  pairs: Array<{ type: string; tag: string }>,
+): Array<{ type: string; tag: string }> {
+  const tags = new Set(pairs.map((p) => p.tag));
+  const wildcards = [...tags].map((tag) => ({ type: '*', tag }));
+  return mergeLockPairs(pairs, wildcards);
+}

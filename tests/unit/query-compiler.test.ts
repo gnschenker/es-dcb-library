@@ -4,6 +4,7 @@ import {
   compileLoadCommittedQuery,
   compileTailCommittedCursorQuery,
   mergeLockPairs,
+  withWildcardTagLocks,
   extractLockPairsFromEvents,
   compileStreamQuery,
   compileCommittedStreamQuery,
@@ -250,5 +251,16 @@ describe('mergeLockPairs()', () => {
       { type: 'EventAlpha', tag: 't' },
       { type: 'EventBeta', tag: 't' },
     ]);
+  });
+});
+
+describe('withWildcardTagLocks()', () => {
+  it('adds (*, tag) for each distinct tag', () => {
+    const merged = mergeLockPairs(
+      extractLockPairs(queryItem({ types: ['EventAlpha'], tags: ['t'] })),
+      extractLockPairsFromEvents([{ type: 'EventBeta', tags: ['t'] }]),
+    );
+    const locked = withWildcardTagLocks(merged);
+    expect(locked).toContainEqual({ type: '*', tag: 't' });
   });
 });

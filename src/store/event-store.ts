@@ -12,6 +12,7 @@ import {
   extractLockPairs,
   extractLockPairsFromEvents,
   mergeLockPairs,
+  withWildcardTagLocks,
 } from '../query/compiler.js';
 import { resolveAppendEvents, type ResolvedAppendEvent } from './resolve-event-tags.js';
 import { applySchema } from './schema.js';
@@ -125,9 +126,11 @@ export class PostgresEventStore implements EventStore {
         await client.query("SET LOCAL lock_timeout = '5s'");
         await client.query("SET LOCAL statement_timeout = '30s'");
 
-        const lockPairs = mergeLockPairs(
-          extractLockPairs(condition.failIfEventsMatch),
-          extractLockPairsFromEvents(resolved.map((r) => ({ type: r.event.type, tags: r.tags }))),
+        const lockPairs = withWildcardTagLocks(
+          mergeLockPairs(
+            extractLockPairs(condition.failIfEventsMatch),
+            extractLockPairsFromEvents(resolved.map((r) => ({ type: r.event.type, tags: r.tags }))),
+          ),
         );
         const acquireLocks = async () => {
           for (const { type, tag } of lockPairs) {
