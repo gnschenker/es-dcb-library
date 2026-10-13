@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterAll } from 'vitest';
 import pg from 'pg';
-import { PostgresEventStore, queryItem, query, UNTAGGED } from '../../src/index.js';
+import { PostgresEventStore, queryItem, query, UNTAGGED, eventStreamCursor } from '../../src/index.js';
 import { createTestPool, resetDatabase } from './helpers.js';
 
 let pool: pg.Pool;
@@ -175,7 +175,7 @@ describe('PostgresEventStore - Tag Model (Integration)', () => {
       await expect(
         store.append(
           { type: 'OrderCancelled', data: {}, tags: ['order:o1'] },
-          { failIfEventsMatch: q, after: event1!.globalPosition }
+          { failIfEventsMatch: q, after: eventStreamCursor(event1!) }
         )
       ).rejects.toThrow();
     });
@@ -199,7 +199,7 @@ describe('PostgresEventStore - Tag Model (Integration)', () => {
       await expect(
         store.append(
           { type: 'OrderShipped', data: {}, tags: ['order:o1'] },
-          { failIfEventsMatch: q, after: event1!.globalPosition }
+          { failIfEventsMatch: q, after: eventStreamCursor(event1!) }
         )
       ).resolves.toBeDefined();
     });
@@ -213,7 +213,7 @@ describe('PostgresEventStore - Tag Model (Integration)', () => {
 
       const writer = async (id: string) => {
         const q = queryItem({ tags: ['order:o1'] });
-        const { version } = await store.load(q);
+        const { position } = await store.load(q);
         
         // Simulate some work
         await new Promise(resolve => setTimeout(resolve, 10));
@@ -224,7 +224,7 @@ describe('PostgresEventStore - Tag Model (Integration)', () => {
         try {
           await store.append(
             { type: `Writer${id}`, data: {}, tags: ['order:o1', `writer:${id}`] },
-            { failIfEventsMatch: q, after: version }
+            { failIfEventsMatch: q, after: position }
           );
           results.push(`success:${id}`);
         } catch (err) {
@@ -257,7 +257,7 @@ describe('PostgresEventStore - Tag Model (Integration)', () => {
         tags: ['order:o1'],
       });
 
-      const { version } = await store.load(queryItem({ tags: ['order:o1'] }));
+      const { position } = await store.load(queryItem({ tags: ['order:o1'] }));
 
       // Append another event
       await store.append({
@@ -270,7 +270,7 @@ describe('PostgresEventStore - Tag Model (Integration)', () => {
       await expect(
         store.append(
           { type: 'StaleAppend', data: {}, tags: ['order:o1'] },
-          { failIfEventsMatch: queryItem({ tags: ['order:o1'] }), after: version }
+          { failIfEventsMatch: queryItem({ tags: ['order:o1'] }), after: position }
         )
       ).rejects.toThrow('Append condition failed');
     });
@@ -293,14 +293,14 @@ describe('PostgresEventStore - Tag Model (Integration)', () => {
       // Query 1: All events for order:o1
       const writer1 = async () => {
         const q = queryItem({ tags: ['order:o1'] });
-        const { version } = await store.load(q);
+        const { position } = await store.load(q);
         await new Promise(resolve => setTimeout(resolve, 10));
         
         try {
           // Event has BOTH tags even though query only requires order:o1
           await store.append(
             { type: 'OrderEvent', data: {}, tags: ['order:o1', 'customer:c1'] },
-            { failIfEventsMatch: q, after: version }
+            { failIfEventsMatch: q, after: position }
           );
           results.push('writer1:success');
         } catch (err) {
@@ -315,14 +315,14 @@ describe('PostgresEventStore - Tag Model (Integration)', () => {
       // Query 2: Events with both customer:c1 AND order:o1
       const writer2 = async () => {
         const q = queryItem({ tags: ['order:o1', 'customer:c1'] });
-        const { version } = await store.load(q);
+        const { position } = await store.load(q);
         await new Promise(resolve => setTimeout(resolve, 10));
         
         try {
           // Event has both tags, matching the query
           await store.append(
             { type: 'CustomerOrderEvent', data: {}, tags: ['order:o1', 'customer:c1'] },
-            { failIfEventsMatch: q, after: version }
+            { failIfEventsMatch: q, after: position }
           );
           results.push('writer2:success');
         } catch (err) {

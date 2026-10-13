@@ -92,7 +92,7 @@ export async function dismissTeacher(
   clock: Clock,
   input: DismissTeacherInput,
 ): Promise<void> {
-  const { events, version } = await store.load(teacherStream(input.teacherId));
+  const { events, position } = await store.load(teacherStream(input.teacherId));
   const state = reduceTeacher(events);
 
   if (state.status === 'none') {
@@ -142,6 +142,6 @@ export async function dismissTeacher(
 
   await store.append(
     [...removedEvents, { type: 'TeacherDismissed', data: dismissedPayload as unknown as Record<string, unknown>} as NewEvent],
-    { failIfEventsMatch: teacherStream(input.teacherId), after: version },
+    { failIfEventsMatch: teacherStream(input.teacherId), after: position },
   );
 }

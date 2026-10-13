@@ -51,7 +51,7 @@ export async function hireTeacher(
   input: HireTeacherInput,
 ): Promise<{ teacherId: string }> {
   const teacherId = teacherIdFromEmail(input.email);
-  const { events, version } = await store.load(teacherStream(teacherId));
+  const { events, position } = await store.load(teacherStream(teacherId));
   const state = reduceTeacher(events);
 
   if (state.status === 'hired') {
@@ -70,7 +70,7 @@ export async function hireTeacher(
 
   await store.append(
     [{ type: 'TeacherHired', data: data as unknown as Record<string, unknown>} as NewEvent],
-    { failIfEventsMatch: teacherStream(teacherId), after: version },
+    { failIfEventsMatch: teacherStream(teacherId), after: position },
   );
 
   return { teacherId };

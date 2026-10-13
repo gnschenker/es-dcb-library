@@ -98,7 +98,7 @@ export async function removeTeacher(
     courseEnrollmentStream(input.courseId),
   );
   
-  const { events, version } = await store.load(allStreams);
+  const { events, position } = await store.load(allStreams);
   
   const courseEvents = events.filter(e => 
     e.tags.includes(`course:${input.courseId}`) &&
@@ -145,6 +145,6 @@ export async function removeTeacher(
 
   await store.append(
     [{ type: 'TeacherRemovedFromCourse', data: data as unknown as Record<string, unknown>} as NewEvent],
-    { failIfEventsMatch: allStreams, after: version },
+    { failIfEventsMatch: allStreams, after: position },
   );
 }

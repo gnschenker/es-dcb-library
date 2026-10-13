@@ -84,7 +84,7 @@ export async function publishCourse(
   clock: Clock,
   input: PublishCourseInput,
 ): Promise<void> {
-  const { events: courseEvents, version: courseVersion } = await store.load(courseStream(input.courseId));
+  const { events: courseEvents, position: coursePosition } = await store.load(courseStream(input.courseId));
   const courseState = reduceCourseForPublish(courseEvents);
 
   if (courseState.status === 'none') {
@@ -120,6 +120,6 @@ export async function publishCourse(
 
   await store.append(
     [{ type: 'CoursePublished', data: data as unknown as Record<string, unknown>} as NewEvent],
-    { failIfEventsMatch: courseStream(input.courseId), after: courseVersion },
+    { failIfEventsMatch: courseStream(input.courseId), after: coursePosition },
   );
 }

@@ -102,7 +102,7 @@ export async function cancelCourse(
     courseEnrollmentStream(input.courseId),
   );
   
-  const { events, version } = await store.load(allStreams);
+  const { events, position } = await store.load(allStreams);
   
   const courseEvents = events.filter(e => 
     e.tags.includes(`course:${input.courseId}`) &&
@@ -168,7 +168,7 @@ export async function cancelCourse(
     [...unenrollEvents, { type: 'CourseCancelled', data: cancelPayload as unknown as Record<string, unknown>} as NewEvent],
     {
       failIfEventsMatch: allStreams,
-      after: version,
+      after: position,
     },
   );
 }

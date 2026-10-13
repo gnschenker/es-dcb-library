@@ -1,12 +1,18 @@
+import type { StreamCursor } from './types.js';
+
 export class ConcurrencyError extends Error {
   override readonly name = 'ConcurrencyError';
 
   constructor(
-    readonly expectedVersion: bigint,
-    readonly actualVersion: bigint,
+    readonly expectedPosition: StreamCursor,
+    readonly actualPosition: StreamCursor,
     message?: string,
   ) {
-    super(message ?? `Concurrency conflict: expected version ${expectedVersion}, got ${actualVersion}`);
+    super(
+      message ??
+        `Concurrency conflict: expected stream at (${expectedPosition.txId}, ${expectedPosition.globalPosition}), ` +
+          `actual (${actualPosition.txId}, ${actualPosition.globalPosition})`,
+    );
     // Restore prototype chain for instanceof checks
     Object.setPrototypeOf(this, new.target.prototype);
   }

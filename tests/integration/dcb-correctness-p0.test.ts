@@ -1,14 +1,11 @@
 /**
- * Adversarial correctness tests (Step 1: document bugs; no library fixes yet).
- *
- * Uses `it.fails` so CI stays green while assertions encode the *desired* behaviour.
- * When a fix lands, change `it.fails` → `it` (the test should then pass).
+ * Adversarial P0 DCB correctness (locks + commit-order-safe load/append positions).
  *
  * Local run (Docker required): npm run test:integration -- tests/integration/dcb-correctness-p0.test.ts
  */
 import { describe, it, expect, beforeEach, afterAll } from 'vitest';
 import pg from 'pg';
-import { PostgresEventStore, queryItem, ConcurrencyError } from '../../src/index.js';
+import { PostgresEventStore, queryItem, ConcurrencyError, type StreamCursor } from '../../src/index.js';
 import { createTestPool, resetDatabase } from './helpers.js';
 
 const STREAM_TAG = 'dcb-p0:shared-stream';
@@ -35,9 +32,9 @@ afterAll(async () => {
   await pool?.end();
 });
 
-describe('DCB correctness — P0 adversarial (expected failures)', () => {
-  describe('P0 #1 — advisory locks derived only from failIfEventsMatch query', () => {
-    it.fails(
+describe('DCB correctness — P0 adversarial', () => {
+  describe('P0 #1 — advisory locks on condition ∪ appended events', () => {
+    it(
       'at most one append succeeds when conditions share a stream but lock pairs differ by event type',
       async () => {
         const queryA = queryItem({ types: ['EventAlpha'], tags: [STREAM_TAG] });
@@ -50,13 +47,16 @@ describe('DCB correctness — P0 adversarial (expected failures)', () => {
           release = resolve;
         });
 
-        const versions: { A: bigint; B: bigint } = { A: 0n, B: 0n };
+        const positions: { A: StreamCursor; B: StreamCursor } = {
+          A: { txId: '0', globalPosition: 0n },
+          B: { txId: '0', globalPosition: 0n },
+        };
 
         const runWriter = async (side: 'A' | 'B'): Promise<'success' | 'conflict' | 'error'> => {
           const q = side === 'A' ? queryA : queryB;
           const type = side === 'A' ? 'EventAlpha' : 'EventBeta';
-          const { version } = await store.load(streamQuery);
-          versions[side] = version;
+          const { position } = await store.load(streamQuery);
+          positions[side] = position;
           ready += 1;
           if (ready === 2) release();
           await barrier;
@@ -64,7 +64,7 @@ describe('DCB correctness — P0 adversarial (expected failures)', () => {
           try {
             await store.append(
               { type, data: { side } },
-              { failIfEventsMatch: q, after: versions[side] },
+              { failIfEventsMatch: q, after: positions[side] },
             );
             return 'success';
           } catch (err) {
@@ -84,8 +84,8 @@ describe('DCB correctness — P0 adversarial (expected failures)', () => {
     );
   });
 
-  describe('P0 #3 — load() version is max(global_position), not commit order', () => {
-    it.fails(
+  describe('P0 #3 — load() position is commit-order-safe', () => {
+    it(
       'conditional append is rejected when an older position commits after load()',
       async () => {
         const clientA = await pool.connect();
@@ -106,8 +106,8 @@ describe('DCB correctness — P0 adversarial (expected failures)', () => {
           );
           await clientB.query('COMMIT');
 
-          const { version } = await store.load(streamQuery);
-          expect(version).toBeGreaterThan(0n);
+          const { position } = await store.load(streamQuery);
+          expect(position.globalPosition).toBeGreaterThan(0n);
 
           await clientA.query('COMMIT');
 
@@ -117,7 +117,7 @@ describe('DCB correctness — P0 adversarial (expected failures)', () => {
           await expect(
             store.append(
               { type: 'FollowUp', data: { step: 'after-hole' } },
-              { failIfEventsMatch: streamQuery, after: version },
+              { failIfEventsMatch: streamQuery, after: position },
             ),
           ).rejects.toThrow(/Append condition failed|ConcurrencyError/);
         } finally {

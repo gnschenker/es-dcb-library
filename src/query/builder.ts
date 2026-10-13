@@ -39,12 +39,12 @@ export function queryItem(item: QueryItem): Query {
  *   courseStream(courseId),
  *   enrollmentStream(studentId, courseId)
  * );
- * const { events, version } = await store.load(combined);
+ * const { events, position } = await store.load(combined);
  * // All events from all three streams in one result
- * // Use the single version for the append condition
+ * // Use the single position for the append condition
  * await store.append(newEvents, {
  *   failIfEventsMatch: combined,
- *   after: version,
+ *   after: position,
  * });
  */
 export function combineQueries(...queries: Query[]): Query {

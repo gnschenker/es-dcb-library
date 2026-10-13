@@ -19,7 +19,7 @@ beforeEach(() => {
 
 function makeMockStore(overrides: Partial<EventStore> = {}): EventStore {
   return {
-    load: vi.fn().mockResolvedValue({ events: [], version: 0n }),
+    load: vi.fn().mockResolvedValue({ events: [], position: { txId: "0", globalPosition: 0n } }),
     append: vi.fn().mockResolvedValue([]),
     stream: vi.fn().mockReturnValue((async function* () {})()),
     initializeSchema: vi.fn().mockResolvedValue(undefined),
@@ -71,7 +71,7 @@ describe('createCourse validations', () => {
 
   it('throws PrerequisiteNotFoundError for non-existent prerequisite', async () => {
     const store = makeMockStore({
-      load: vi.fn().mockResolvedValue({ events: [], version: 0n }),
+      load: vi.fn().mockResolvedValue({ events: [], position: { txId: "0", globalPosition: 0n } }),
     });
     await expect(createCourse(store, systemClock, { title: 'T', semester: 'F24', creditHours: 3, maxStudents: 10, prerequisites: ['nonexistent-id'], dropDeadline: '2024-09-15', withdrawalDeadline: '2024-10-15' }))
       .rejects.toThrow(PrerequisiteNotFoundError);
