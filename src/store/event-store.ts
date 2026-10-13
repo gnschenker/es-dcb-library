@@ -72,22 +72,23 @@ export class PostgresEventStore implements EventStore {
   }
 
   async load(query: Query): Promise<LoadResult> {
+    const client = await this.pool.connect();
     let readXmin: string;
+    let result: pg.QueryResult;
     try {
-      const xminResult = await this.pool.query<{ xmin: string }>(
+      await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ');
+      const xminResult = await client.query<{ xmin: string }>(
         'SELECT pg_snapshot_xmin(pg_current_snapshot())::text AS xmin',
       );
       readXmin = xminResult.rows[0]!.xmin;
+      const { sql, params } = compileLoadCommittedQuery(query);
+      result = await client.query(sql, params as unknown[]);
+      await client.query('COMMIT');
     } catch (err) {
-      throw new EventStoreError(`Failed to read snapshot xmin: ${String(err)}`, err);
-    }
-
-    const { sql, params } = compileLoadCommittedQuery(query);
-    let result: pg.QueryResult;
-    try {
-      result = await this.pool.query(sql, params as unknown[]);
-    } catch (err) {
+      await client.query('ROLLBACK').catch(() => undefined);
       throw new EventStoreError(`Failed to load events: ${String(err)}`, err);
+    } finally {
+      client.release();
     }
     const events: StoredEvent[] = result.rows.map(mapRow);
     const position: StreamCursor =
