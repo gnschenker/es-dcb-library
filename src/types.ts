@@ -12,6 +12,12 @@ export interface StreamCursor {
   /** PostgreSQL xid8 of the inserting transaction (string from pg driver). */
   txId: string;
   globalPosition: bigint;
+  /**
+   * Snapshot `pg_snapshot_xmin` captured at `load()` time. Present on `load().position`;
+   * used by append `after` to detect late commits below the watermark without re-matching
+   * events that were already visible when the cursor was taken.
+   */
+  readXmin?: string;
 }
 
 /** Start cursor: before any event in (tx_id, global_position) order. */

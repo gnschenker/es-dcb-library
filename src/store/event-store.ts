@@ -65,6 +65,16 @@ export class PostgresEventStore implements EventStore {
   }
 
   async load(query: Query): Promise<LoadResult> {
+    let readXmin: string;
+    try {
+      const xminResult = await this.pool.query<{ xmin: string }>(
+        'SELECT pg_snapshot_xmin(pg_current_snapshot())::text AS xmin',
+      );
+      readXmin = xminResult.rows[0]!.xmin;
+    } catch (err) {
+      throw new EventStoreError(`Failed to read snapshot xmin: ${String(err)}`, err);
+    }
+
     const { sql, params } = compileLoadCommittedQuery(query);
     let result: pg.QueryResult;
     try {
@@ -75,8 +85,12 @@ export class PostgresEventStore implements EventStore {
     const events: StoredEvent[] = result.rows.map(mapRow);
     const position: StreamCursor =
       events.length > 0
-        ? { txId: events[events.length - 1]!.txId, globalPosition: events[events.length - 1]!.globalPosition }
-        : STREAM_CURSOR_ORIGIN;
+        ? {
+            txId: events[events.length - 1]!.txId,
+            globalPosition: events[events.length - 1]!.globalPosition,
+            readXmin,
+          }
+        : { ...STREAM_CURSOR_ORIGIN, readXmin };
     return { events, position };
   }
 

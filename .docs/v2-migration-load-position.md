@@ -7,6 +7,8 @@
 
 `load()` only returns **committed-visible** events, ordered by `(tx_id, global_position)` — the same rule as `stream({ committedOnly: true })`.
 
+`load().position` includes **`readXmin`** (snapshot xmin at load time). Always pass the full object to `after` — do not strip fields.
+
 ## Why
 
 PostgreSQL assigns `global_position` before commit. Using `MAX(global_position)` from a plain load allowed optimistic appends to succeed after a **late commit** of an older transaction (P0 #3).

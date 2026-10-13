@@ -218,9 +218,16 @@ export function compileExistsQuery(query: Query, after?: StreamCursor): Compiled
     counter.n += 1;
     const afterPosRef = `$${counter.n}`;
 
-    positionClause =
-      ` AND ((tx_id, global_position) > (${afterTxRef}::xid8, ${afterPosRef})` +
-      ` OR (${afterPosRef} > 0 AND global_position < ${afterPosRef}))`;
+    if (after.readXmin !== undefined) {
+      params.push(after.readXmin);
+      counter.n += 1;
+      const readXminRef = `$${counter.n}`;
+      positionClause =
+        ` AND ((tx_id, global_position) > (${afterTxRef}::xid8, ${afterPosRef})` +
+        ` OR (${afterPosRef} > 0 AND global_position < ${afterPosRef} AND tx_id >= ${readXminRef}::xid8))`;
+    } else {
+      positionClause = ` AND (tx_id, global_position) > (${afterTxRef}::xid8, ${afterPosRef})`;
+    }
   }
 
   const sql = [

@@ -151,13 +151,19 @@ describe('compileExistsQuery()', () => {
 
   it('includes commit-safe cursor constraint when after is specified', () => {
     const q = queryItem({ types: ['EventA'] });
-    const { sql, params } = compileExistsQuery(q, { txId: '99', globalPosition: 42n });
+    const { sql, params } = compileExistsQuery(q, {
+      txId: '99',
+      globalPosition: 42n,
+      readXmin: '1000',
+    });
 
     expect(sql).toContain('(tx_id, global_position) > ($2::xid8, $3)');
     expect(sql).toContain('global_position < $3');
-    expect(params).toHaveLength(3);
+    expect(sql).toContain('tx_id >= $4::xid8');
+    expect(params).toHaveLength(4);
     expect(params[1]).toBe('99');
     expect(params[2]).toBe(42n);
+    expect(params[3]).toBe('1000');
   });
 });
 
