@@ -267,7 +267,7 @@ describe('compileStreamTagExistsQuery()', () => {
     expect(sql).toContain('global_position > $2');
     expect(sql).toContain('global_position < $2');
     expect(sql).not.toContain('tx_id, global_position');
-    expect(params).toEqual(['my-tag', 5n, '99']);
+    expect(params).toEqual([['my-tag'], 5n, '99']);
   });
 });
 

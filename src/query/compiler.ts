@@ -263,7 +263,7 @@ export function compileStreamTagExistsQuery(
   after?: StreamCursor,
   options: ExistsQueryOptions = {},
 ): CompiledQuery {
-  const params: unknown[] = [tag];
+  const params: unknown[] = [[tag]];
   const counter = { n: 1 };
   const lateCommitHoles = options.lateCommitHoles ?? true;
 
