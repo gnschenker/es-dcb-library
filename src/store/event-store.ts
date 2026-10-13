@@ -3,13 +3,21 @@ import type { Query } from '../query/types.js';
 import type { NewEvent, StoredEvent, LoadResult, AppendCondition, StreamOptions, EventStore, TagExtractor } from '../types.js';
 import { UNTAGGED } from '../types.js';
 import { ConcurrencyError, EventStoreError, MissingTagExtractorError } from '../errors.js';
-import { compileLoadQuery, compileExistsQuery, compileVersionCheckQuery, compileStreamQuery, compileCommittedStreamQuery, extractLockPairs } from '../query/compiler.js';
+import {
+  compileLoadQuery,
+  compileExistsQuery,
+  compileVersionCheckQuery,
+  compileStreamQuery,
+  compileCommittedStreamQuery,
+  extractLockPairs,
+} from '../query/compiler.js';
 import { applySchema } from './schema.js';
 import { mapRow } from './row-mapper.js';
 import { STREAM_CURSOR_ORIGIN } from '../types.js';
 import type { StreamCursor } from '../types.js';
 import { createObservability, type DcbObservability } from '../observability/index.js';
 import type { ObservabilityConfig } from '../observability/index.js';
+import { createAppendTelemetry, type AppendTelemetry } from '../observability/append-telemetry.js';
 
 export interface EventStoreConfig {
   pool: pg.Pool;
@@ -36,13 +44,16 @@ export interface EventStoreConfig {
 export class PostgresEventStore implements EventStore {
   private readonly pool: pg.Pool;
   private readonly tagExtractors: Record<string, TagExtractor | typeof UNTAGGED>;
-  /** Reserved for append/load/stream instrumentation (P-OTel-02+). */
   private readonly observability: DcbObservability;
+  private readonly appendTelemetry: AppendTelemetry | undefined;
 
   constructor(config: EventStoreConfig) {
     this.pool = config.pool;
     this.tagExtractors = config.tagExtractors ?? {};
     this.observability = createObservability(config.observability);
+    this.appendTelemetry = this.observability.enabled
+      ? createAppendTelemetry(this.observability)
+      : undefined;
   }
 
   async initializeSchema(): Promise<void> {
@@ -71,76 +82,86 @@ export class PostgresEventStore implements EventStore {
 
   async append(events: NewEvent | NewEvent[], condition?: AppendCondition): Promise<StoredEvent[]> {
     const eventList = Array.isArray(events) ? events : [events];
+    const run = () => this.appendToDatabase(eventList, condition);
+    if (this.appendTelemetry === undefined) {
+      return run();
+    }
+    return this.appendTelemetry.runAppend(eventList, condition, async (hooks) => {
+      const stored = await this.appendToDatabase(eventList, condition, hooks);
+      hooks.onEventsStored(stored);
+      return stored;
+    });
+  }
+
+  private async appendToDatabase(
+    eventList: NewEvent[],
+    condition: AppendCondition | undefined,
+    hooks?: { runAcquireLocks: (pairCount: number, acquire: () => Promise<void>) => Promise<void> },
+  ): Promise<StoredEvent[]> {
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
 
       if (condition !== undefined) {
-        // Set session-local timeouts
         await client.query("SET LOCAL lock_timeout = '5s'");
         await client.query("SET LOCAL statement_timeout = '30s'");
 
-        // Acquire advisory locks for all (type, tag) pairs in sorted order
-        // Using blocking pg_advisory_xact_lock - will wait for locks held by other transactions
         const lockPairs = extractLockPairs(condition.failIfEventsMatch);
-        for (const { type, tag } of lockPairs) {
-          const lockKey = `${type}:${tag}`;
-          
-          // Blocking lock - waits until acquired or lock_timeout expires
-          await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [lockKey]);
+        const acquireLocks = async () => {
+          for (const { type, tag } of lockPairs) {
+            const lockKey = `${type}:${tag}`;
+            await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [lockKey]);
+          }
+        };
+
+        if (hooks !== undefined) {
+          await hooks.runAcquireLocks(lockPairs.length, acquireLocks);
+        } else {
+          await acquireLocks();
         }
 
-        // All locks acquired - now check append condition
-        // If condition fails here, it's a real conflict (not lock contention)
         const { sql: existsSql, params: existsParams } = compileExistsQuery(
           condition.failIfEventsMatch,
-          condition.after
+          condition.after,
         );
         const existsResult = await client.query<{ exists: boolean }>(existsSql, existsParams as unknown[]);
-        
+
         if (existsResult.rows[0]!.exists) {
-          // Fetch actual max position for error reporting
           const { sql: versionSql, params: versionParams } = compileVersionCheckQuery(
-            condition.failIfEventsMatch
+            condition.failIfEventsMatch,
           );
           const versionResult = await client.query<{ max_pos: string }>(versionSql, versionParams as unknown[]);
           const actualVersion = BigInt(versionResult.rows[0]!.max_pos);
-          
+
           await client.query('ROLLBACK');
           throw new ConcurrencyError(
             condition.after ?? 0n,
             actualVersion,
-            'Append condition failed: matching events exist after specified position'
+            'Append condition failed: matching events exist after specified position',
           );
         }
       }
 
-      // Insert all events
       const stored: StoredEvent[] = [];
       for (const event of eventList) {
-        // Compute final tags: merge event.tags with extracted tags
         const eventTags = event.tags ?? [];
         const extractorOrMarker = this.tagExtractors[event.type];
-        
+
         let extractedTags: string[] = [];
-        
+
         if (extractorOrMarker === UNTAGGED) {
-          // Type is marked as intentionally untagged
           extractedTags = [];
         } else if (typeof extractorOrMarker === 'function') {
-          // Extractor function exists
           extractedTags = extractorOrMarker(event);
         } else if (eventTags.length === 0) {
-          // No extractor, no explicit tags -> fail loudly
           throw new MissingTagExtractorError(
             event.type,
             `Event type '${event.type}' has no registered tag extractor and no explicit tags were provided. ` +
-            `Either register a tag extractor, mark it as UNTAGGED, or pass tags explicitly in the event.`
+            `Either register a tag extractor, mark it as UNTAGGED, or pass tags explicitly in the event.`,
           );
         }
-        // If eventTags.length > 0 but no extractor, allow it (explicit tags provided)
-        
-        const finalTags = [...new Set([...eventTags, ...extractedTags])]; // deduplicate
+
+        const finalTags = [...new Set([...eventTags, ...extractedTags])];
 
         const sql = `INSERT INTO events (type, data, metadata, tags)
         VALUES ($1, $2::jsonb, $3::jsonb, $4)
