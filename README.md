@@ -106,7 +106,7 @@ await store.append(
 ```
 
 **Concurrency control:**  
-`load()` returns only **committed-visible** events, ordered by `(tx_id, global_position)`. Pass the full `position` (`StreamCursor`, including `readXmin`) to `after` — do not pass a bare `globalPosition`. Do not reuse `readXmin` from an older load with a newer event’s `txId` / `globalPosition`.
+`load()` returns only **committed-visible** events, ordered by `(tx_id, global_position)`. Pass the full `position` (`StreamCursor`, including `readXmin`) to `after` — do not pass a bare `globalPosition`. `readXmin` is bound to that load: committed-visible rows have `tx_id < readXmin`. Stitching an older `readXmin` onto a later event cursor throws `InconsistentStreamCursorError` (not `ConcurrencyError`). Use `eventStreamCursor(event)` when the cursor is a stored event.
 
 `failIfEventsMatch` then checks whether any matching event appeared after that cursor (including a late commit of an older transaction). If so, a `ConcurrencyError` is thrown. PostgreSQL advisory locks (sorted `(type, tag)` pairs from the condition **and** the events being appended, plus `(*, tag)` for each tag) serialize overlapping writers. `ConcurrencyError` is an application-level condition failure, not lock contention. Lock timeout, deadlock, and serialization failure are separate typed errors (`LockTimeoutError`, `DeadlockError`, `SerializationFailureError`).
 
@@ -183,7 +183,7 @@ interface Query {
 interface StreamCursor {
   txId: string;
   globalPosition: bigint;
-  readXmin?: string;  // snapshot xmin captured by load(); pass through to after
+  readXmin?: string;  // xmin captured with this cursor; must satisfy txId < readXmin
 }
 
 interface LoadResult {
@@ -216,6 +216,7 @@ interface EventStore {
 | Error | When |
 | --- | --- |
 | `ConcurrencyError` | `failIfEventsMatch` found matching events after `after` (`expectedPosition` / `actualPosition` are `StreamCursor`s) |
+| `InconsistentStreamCursorError` | `after.readXmin` is not from the same snapshot as `after.txId` (`txId < readXmin` is required) |
 | `EmptyBatchError` | `append([])` — rejected before `BEGIN` |
 | `MissingTagExtractorError` | no extractor, no explicit tags, not `UNTAGGED` |
 | `InvalidTagError` | empty or whitespace tag (explicit or from an extractor) |

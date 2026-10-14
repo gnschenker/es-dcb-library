@@ -30,6 +30,23 @@ export class EventStoreError extends Error {
   }
 }
 
+export class InconsistentStreamCursorError extends Error {
+  override readonly name = 'InconsistentStreamCursorError';
+
+  constructor(
+    readonly cursor: StreamCursor,
+    message?: string,
+  ) {
+    super(
+      message ??
+        `StreamCursor.readXmin ${JSON.stringify(cursor.readXmin)} is not consistent with txId ${JSON.stringify(cursor.txId)}. ` +
+          'load() positions always have txId < readXmin (committed-visible events). ' +
+          'Pass load().position unchanged, or eventStreamCursor(event) without a foreign readXmin.',
+    );
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
 export class EmptyBatchError extends Error {
   override readonly name = 'EmptyBatchError';
 

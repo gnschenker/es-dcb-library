@@ -13,7 +13,9 @@ This note covers the public API changes that land with **v2.0.0**. The version b
 
 `load().position` includes **`readXmin`** (snapshot xmin at load time). Always pass the full object to `after` — do not strip fields or use `globalPosition` alone.
 
-Do **not** mix `readXmin` from an older `load()` with a later event’s `txId` / `globalPosition`. After two or more writes, the late-commit hole check (`global_position < after.globalPosition AND tx_id >= readXmin`) treats earlier visible events as conflicts. Either call `load()` again for each decision, or pass `eventStreamCursor(stored)` **without** `readXmin` when the cursor is a known persisted event.
+`readXmin` is **bound to that cursor**. Committed-visible events have `tx_id < readXmin`, so a consistent position always satisfies `txId < readXmin` (origin `txId === '0'` included). `append()` checks this **before** `BEGIN`. A later event’s `(txId, globalPosition)` paired with an older load’s `readXmin` throws **`InconsistentStreamCursorError`** — it is not a `ConcurrencyError` and does not run the late-commit hole check.
+
+Use `load().position` unchanged for a decision, or `eventStreamCursor(stored)` (no `readXmin`; hole detection omitted) for a known persisted event. `isConsistentStreamCursor()` is exported for the same invariant.
 
 ### Why
 
@@ -104,6 +106,7 @@ await manager.waitUntilLive();
 - Explicit `event.tags` are first-class; a global `tagExtractors` registry is optional.
 - Empty or whitespace tags throw **`InvalidTagError`**.
 - SQLSTATE `55P03` / `40P01` / `40001` → **`LockTimeoutError`** / **`DeadlockError`** / **`SerializationFailureError`** (retryable `EventStoreError` subclasses).
+- Mismatched `after` cursor (`readXmin` not from the same load as `txId`) → **`InconsistentStreamCursorError`**.
 - Payloads and metadata are stored as given. No automatic upcasting.
 
 ## Unchanged

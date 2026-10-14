@@ -25,7 +25,7 @@ These are order-of-magnitude numbers, not a published SLA. A laptop or productio
 
 High-contention rounds: **5 successes / 35 conflicts** (exactly one winner per 8-way race). p95 is dominated by lock wait behind the winner.
 
-Conditional sequential cost includes a `load()` per append (the supported command-handler pattern). Do not advance `after` by copying `readXmin` from an older load onto a newer event cursor — that false-conflicts after two writes (see [v2-migration.md](./v2-migration.md)).
+Conditional sequential cost includes a `load()` per append (the supported command-handler pattern). Copying `readXmin` from an older load onto a newer event cursor is rejected as `InconsistentStreamCursorError` (see [v2-migration.md](./v2-migration.md)).
 
 ## Query-plan observations
 

@@ -84,7 +84,7 @@ const { events, position } = await store.load(orderQuery);
 await store.append(newEvents, { failIfEventsMatch: orderQuery, after: position });
 ```
 
-Items are OR-ed. Within an item, `types` is OR (empty = any type) and `tags` is AND (empty = any tags). `load()` returns only committed-visible events, ordered by `(tx_id, global_position)`. Always pass the full `position` (including `readXmin`) to `after`.
+Items are OR-ed. Within an item, `types` is OR (empty = any type) and `tags` is AND (empty = any tags). `load()` returns only committed-visible events, ordered by `(tx_id, global_position)`. Always pass the full `position` (including `readXmin`) to `after`. `readXmin` is bound to that cursor (`txId < readXmin`); a stitched pair throws `InconsistentStreamCursorError`.
 
 ### Compiler
 

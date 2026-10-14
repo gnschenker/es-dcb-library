@@ -13,9 +13,10 @@ export interface StreamCursor {
   txId: string;
   globalPosition: bigint;
   /**
-   * Snapshot `pg_snapshot_xmin` captured at `load()` time. Present on `load().position`;
-   * used by append `after` to detect late commits below the watermark without re-matching
-   * events that were already visible when the cursor was taken.
+   * Snapshot `pg_snapshot_xmin` captured with this cursor (same `load()`).
+   * Committed-visible events have `tx_id < readXmin`, so a consistent position
+   * always satisfies `txId < readXmin`. Append rejects a mismatched pair
+   * (`InconsistentStreamCursorError`) instead of treating it as a concurrency conflict.
    */
   readXmin?: string;
 }
@@ -53,6 +54,23 @@ export interface AppendCondition {
 /** Cursor for a stored event (for tests and manual append conditions). */
 export function eventStreamCursor(event: StoredEvent): StreamCursor {
   return { txId: event.txId, globalPosition: event.globalPosition };
+}
+
+/**
+ * A `load()` cursor binds `readXmin` to the head it observed: every visible
+ * row has `tx_id < xmin`. Origin (`txId === '0'`) is consistent with any xmin.
+ * Cursors without `readXmin` (e.g. `eventStreamCursor`) skip late-commit holes
+ * and are always consistent.
+ */
+export function isConsistentStreamCursor(cursor: StreamCursor): boolean {
+  if (cursor.readXmin === undefined) {
+    return true;
+  }
+  try {
+    return BigInt(cursor.txId) < BigInt(cursor.readXmin);
+  } catch {
+    return false;
+  }
 }
 
 export interface StreamOptions {

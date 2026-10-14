@@ -7,6 +7,7 @@ import {
   EventStoreError,
   MissingTagExtractorError,
   EmptyBatchError,
+  InconsistentStreamCursorError,
   InvalidTagError,
   LockTimeoutError,
   DeadlockError,
@@ -29,7 +30,7 @@ import {
 import { resolveAppendEvents, type ResolvedAppendEvent } from './resolve-event-tags.js';
 import { applySchema } from './schema.js';
 import { mapRow } from './row-mapper.js';
-import { STREAM_CURSOR_ORIGIN } from '../types.js';
+import { STREAM_CURSOR_ORIGIN, isConsistentStreamCursor } from '../types.js';
 import type { StreamCursor } from '../types.js';
 import { createObservability, type DcbObservability } from '../observability/index.js';
 import type { ObservabilityConfig } from '../observability/index.js';
@@ -130,6 +131,9 @@ export class PostgresEventStore implements EventStore {
     if (eventList.length === 0) {
       throw new EmptyBatchError();
     }
+    if (condition?.after !== undefined && !isConsistentStreamCursor(condition.after)) {
+      throw new InconsistentStreamCursorError(condition.after);
+    }
     const resolved = resolveAppendEvents(eventList, this.tagExtractors);
     const run = () => this.appendToDatabase(resolved, condition);
     if (this.appendTelemetry === undefined) {
@@ -222,6 +226,7 @@ export class PostgresEventStore implements EventStore {
         err instanceof ConcurrencyError ||
         err instanceof MissingTagExtractorError ||
         err instanceof EmptyBatchError ||
+        err instanceof InconsistentStreamCursorError ||
         err instanceof InvalidTagError
       ) {
         throw err;

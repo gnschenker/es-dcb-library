@@ -13,6 +13,7 @@ import {
   queryItem,
   ConcurrencyError,
   EmptyBatchError,
+  InconsistentStreamCursorError,
   MissingTagExtractorError,
   type Query,
 } from '../../src/index.js';
@@ -327,7 +328,7 @@ describe('P2 #8 — large histories and payload fidelity', () => {
     expect(streamed.map((e) => e.eventId)).toEqual(loaded.events.map((e) => e.eventId));
   }, 60_000);
 
-  it('stale readXmin on an advanced cursor is a false conflict (usage footgun)', async () => {
+  it('rejects a stale readXmin stitched onto a later cursor (not a ConcurrencyError)', async () => {
     const q = queryItem({ tags: [SHARED] });
     const empty = await store.load(q);
     const [first] = await store.append(
@@ -342,22 +343,30 @@ describe('P2 #8 — large histories and payload fidelity', () => {
       },
     );
 
-    // Mixing the original load's readXmin with a later position treats First as a late commit.
+    const stale = {
+      txId: second!.txId,
+      globalPosition: second!.globalPosition,
+      ...(empty.position.readXmin !== undefined
+        ? { readXmin: empty.position.readXmin }
+        : {}),
+    };
+
     await expect(
       store.append(
         { type: 'Third', data: {}, tags: [SHARED] },
-        {
-          failIfEventsMatch: q,
-          after: {
-            txId: second!.txId,
-            globalPosition: second!.globalPosition,
-            ...(empty.position.readXmin !== undefined
-              ? { readXmin: empty.position.readXmin }
-              : {}),
-          },
-        },
+        { failIfEventsMatch: q, after: stale },
       ),
-    ).rejects.toBeInstanceOf(ConcurrencyError);
+    ).rejects.toBeInstanceOf(InconsistentStreamCursorError);
+
+    await expect(
+      store.append(
+        { type: 'Third', data: {}, tags: [SHARED] },
+        { failIfEventsMatch: q, after: stale },
+      ),
+    ).rejects.not.toBeInstanceOf(ConcurrencyError);
+
+    const { events: before } = await store.load(q);
+    expect(before.map((e) => e.type)).toEqual(['First', 'Second']);
 
     const fresh = await store.load(q);
     await expect(
@@ -366,6 +375,43 @@ describe('P2 #8 — large histories and payload fidelity', () => {
         { failIfEventsMatch: q, after: fresh.position },
       ),
     ).resolves.toHaveLength(1);
+  });
+
+  it('still detects a real late-commit conflict after a consistent load() cursor', async () => {
+    const q = queryItem({ tags: [SHARED] });
+    const clientA = await pool.connect();
+    const clientB = await pool.connect();
+
+    try {
+      await clientA.query('BEGIN');
+      await clientA.query(
+        `INSERT INTO events (type, data, tags) VALUES ($1, $2::jsonb, $3)`,
+        ['Late', JSON.stringify({ n: 1 }), [SHARED]],
+      );
+
+      await clientB.query('BEGIN');
+      await clientB.query(
+        `INSERT INTO events (type, data, tags) VALUES ($1, $2::jsonb, $3)`,
+        ['Early', JSON.stringify({ n: 2 }), [SHARED]],
+      );
+      await clientB.query('COMMIT');
+
+      const { position } = await store.load(q);
+
+      await clientA.query('COMMIT');
+
+      await expect(
+        store.append(
+          { type: 'FollowUp', data: {}, tags: [SHARED] },
+          { failIfEventsMatch: q, after: position },
+        ),
+      ).rejects.toBeInstanceOf(ConcurrencyError);
+    } finally {
+      await clientA.query('ROLLBACK').catch(() => undefined);
+      await clientB.query('ROLLBACK').catch(() => undefined);
+      clientA.release();
+      clientB.release();
+    }
   });
 
   it('preserves payload and metadata bytes with no transformation', async () => {
