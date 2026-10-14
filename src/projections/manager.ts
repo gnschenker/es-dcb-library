@@ -13,6 +13,9 @@ import {
   ManagedListenClient,
 } from './loop.js';
 import { applyProjectionSchema } from './schema.js';
+import { runProjectionSetup } from './setup.js';
+import { evaluateProjectionReadiness, cursorReached } from './readiness.js';
+import { ProjectionNotReadyError } from '../errors.js';
 
 export interface ProjectionManagerConfig {
   /** Connection pool for read-model writes and checkpoint updates. */
@@ -93,23 +96,8 @@ export class ProjectionManager {
       schemaClient.release();
     }
 
-    // 2. Call setup() for each projection with timeout
     for (const def of this.config.projections) {
-      if (def.setup) {
-        const setupClient = await this.config.pool.connect();
-        try {
-          await Promise.race([
-            def.setup(setupClient),
-            sleep(this.resolved.setupTimeoutMs).then(() => {
-              throw new Error(
-                `Projection "${def.name}" setup() timed out after ${this.resolved.setupTimeoutMs}ms`,
-              );
-            }),
-          ]);
-        } finally {
-          setupClient.release();
-        }
-      }
+      await runProjectionSetup(def, this.config.pool, this.resolved.setupTimeoutMs);
     }
 
     // 3. Insert initial checkpoint rows (idempotent)
@@ -162,21 +150,38 @@ export class ProjectionManager {
     this.lockClients.clear();
   }
 
+  /**
+   * Resolves only when every configured projection is `live`.
+   * Throws `ProjectionNotReadyError` if any loop is `error` or `stopped`
+   * (including single-instance lock not acquired).
+   */
   async waitUntilLive(timeoutMs = 60_000): Promise<void> {
     const deadline = Date.now() + timeoutMs;
+    const expected = this.config.projections.length;
     while (Date.now() < deadline) {
-      const statuses = [...this.loopStates.values()].map((s) => s.status);
-      if (
-        statuses.length > 0 &&
-        statuses.every((s) => s === 'live' || s === 'error' || s === 'stopped')
-      ) {
+      const readiness = evaluateProjectionReadiness(
+        [...this.loopStates.values()].map((s) => ({ name: s.name, status: s.status })),
+        expected,
+      );
+      if (readiness.kind === 'live') {
         return;
+      }
+      if (readiness.kind === 'failed') {
+        throw new ProjectionNotReadyError(
+          `waitUntilLive failed: ${readiness.failed.map((f) => `${f.name}=${f.status}`).join(', ')}`,
+          readiness.failed,
+        );
       }
       await sleep(50);
     }
-    throw new Error(`waitUntilLive timed out after ${timeoutMs}ms`);
+    throw new ProjectionNotReadyError(`waitUntilLive timed out after ${timeoutMs}ms`);
   }
 
+  /**
+   * Convenience wait on checkpoint `last_position` only.
+   * This is **not** a commit-order watermark — a higher position can appear
+   * before an older transaction commits. Use `waitForCursor` for (tx_id, position).
+   */
   async waitForPosition(
     projectionName: string,
     targetPosition: bigint,
@@ -196,6 +201,38 @@ export class ProjectionManager {
     }
     throw new Error(
       `waitForPosition("${projectionName}", ${targetPosition}) timed out after ${timeoutMs}ms`,
+    );
+  }
+
+  /**
+   * Waits until the projection checkpoint is at or past `target` in
+   * `(tx_id, global_position)` order (same cursor as committed-only streams).
+   */
+  async waitForCursor(
+    projectionName: string,
+    target: StreamCursor,
+    timeoutMs = 5_000,
+  ): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const result = await this.config.pool.query<{
+        last_tx_id: string | null;
+        last_position: string | null;
+      }>(
+        'SELECT last_tx_id, last_position FROM projection_checkpoints WHERE name = $1',
+        [projectionName],
+      );
+      const row = result.rows[0];
+      const current = checkpointRowToCursor(
+        row ?? { last_tx_id: null, last_position: null },
+      );
+      if (cursorReached(current, target)) {
+        return;
+      }
+      await sleep(50);
+    }
+    throw new Error(
+      `waitForCursor("${projectionName}", ${target.txId}:${target.globalPosition}) timed out after ${timeoutMs}ms`,
     );
   }
 
@@ -260,7 +297,17 @@ export class ProjectionManager {
       );
       if (!lockResult.rows[0]?.acquired) {
         await lockClient.end();
-        return; // another instance owns this projection
+        this.loopStates.set(def.name, {
+          name: def.name,
+          status: 'stopped',
+          lastCursor: STREAM_CURSOR_ORIGIN,
+          lastUpdatedAt: null,
+          errorDetail: { reason: 'singleInstanceLockNotAcquired' },
+          stopRequested: true,
+          stopSignal: triggerStop,
+          notifySignal: triggerNotify,
+        });
+        return;
       }
       this.lockClients.set(def.name, lockClient);
     }

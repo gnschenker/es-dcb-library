@@ -1,6 +1,6 @@
 import type { NewEvent, TagExtractor } from '../types.js';
 import { UNTAGGED } from '../types.js';
-import { MissingTagExtractorError } from '../errors.js';
+import { MissingTagExtractorError, InvalidTagError } from '../errors.js';
 
 export interface ResolvedAppendEvent {
   event: NewEvent;
@@ -38,5 +38,11 @@ export function resolveFinalTags(
     );
   }
 
-  return [...new Set([...eventTags, ...extractedTags])];
+  const finalTags = [...new Set([...eventTags, ...extractedTags])];
+  for (const tag of finalTags) {
+    if (typeof tag !== 'string' || tag.trim() === '') {
+      throw new InvalidTagError(tag);
+    }
+  }
+  return finalTags;
 }

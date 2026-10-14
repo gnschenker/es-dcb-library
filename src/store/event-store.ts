@@ -2,7 +2,17 @@ import pg from 'pg';
 import type { Query } from '../query/types.js';
 import type { NewEvent, StoredEvent, LoadResult, AppendCondition, StreamOptions, EventStore, TagExtractor } from '../types.js';
 import { UNTAGGED } from '../types.js';
-import { ConcurrencyError, EventStoreError, MissingTagExtractorError, EmptyBatchError } from '../errors.js';
+import {
+  ConcurrencyError,
+  EventStoreError,
+  MissingTagExtractorError,
+  EmptyBatchError,
+  InvalidTagError,
+  LockTimeoutError,
+  DeadlockError,
+  SerializationFailureError,
+  errorFromPg,
+} from '../errors.js';
 import {
   compileLoadCommittedQuery,
   compileExistsQuery,
@@ -102,6 +112,19 @@ export class PostgresEventStore implements EventStore {
     return { events, position };
   }
 
+  /**
+   * Persist one or more events atomically.
+   *
+   * With `condition`, DCB concurrency is enforced (locks + failIfEventsMatch).
+   * Without `condition`, the batch is still atomic but **not** isolated from
+   * concurrent writers — callers must not use an unconditional append to
+   * protect a business invariant.
+   *
+   * Empty arrays throw `EmptyBatchError`. PostgreSQL lock timeout, deadlock,
+   * and serialization failures surface as `LockTimeoutError`, `DeadlockError`,
+   * and `SerializationFailureError` (retryable). `ConcurrencyError` is an
+   * application-level condition failure (do not blindly retry without reload).
+   */
   async append(events: NewEvent | NewEvent[], condition?: AppendCondition): Promise<StoredEvent[]> {
     const eventList = Array.isArray(events) ? events : [events];
     if (eventList.length === 0) {
@@ -198,9 +221,18 @@ export class PostgresEventStore implements EventStore {
         err instanceof EventStoreError ||
         err instanceof ConcurrencyError ||
         err instanceof MissingTagExtractorError ||
-        err instanceof EmptyBatchError
+        err instanceof EmptyBatchError ||
+        err instanceof InvalidTagError
       ) {
         throw err;
+      }
+      const mapped = errorFromPg(err);
+      if (
+        mapped instanceof LockTimeoutError ||
+        mapped instanceof DeadlockError ||
+        mapped instanceof SerializationFailureError
+      ) {
+        throw mapped;
       }
       throw new EventStoreError(`Failed to append events: ${String(err)}`, err);
     } finally {

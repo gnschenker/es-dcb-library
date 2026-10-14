@@ -81,6 +81,10 @@ export const UNTAGGED: unique symbol = Symbol('UNTAGGED');
 
 export interface EventStore {
   load(query: Query): Promise<LoadResult>;
+  /**
+   * Atomic insert. `condition` is required to protect a DCB decision.
+   * Omitting `condition` commits the batch without locking or version checks.
+   */
   append(events: NewEvent | NewEvent[], condition?: AppendCondition): Promise<StoredEvent[]>;
   stream(query: Query, options?: StreamOptions): AsyncIterable<StoredEvent>;
   initializeSchema(): Promise<void>;
