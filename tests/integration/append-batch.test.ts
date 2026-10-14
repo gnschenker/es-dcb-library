@@ -57,13 +57,10 @@ describe('P0 #2 — append batch validation', () => {
   });
 
   it('rolls back a mid-batch insert failure so earlier events in the batch are not visible', async () => {
-    const circular: Record<string, unknown> = {};
-    circular['self'] = circular;
-
     await expect(
       store.append([
         { type: 'Ok', data: { n: 1 }, tags: ['t'] },
-        { type: 'Bad', data: circular, tags: ['t'] },
+        { type: 'x'.repeat(300), data: {}, tags: ['t'] },
       ]),
     ).rejects.toThrow();
 
