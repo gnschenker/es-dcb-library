@@ -97,16 +97,20 @@ await store.append([
 
 // Later: append with optimistic concurrency check
 const orderQuery = queryItem({ types: ['OrderCreated', 'OrderShipped'], tags: [`order:${orderId}`] });
-const { version } = await store.load(orderQuery);
+const { position } = await store.load(orderQuery);
 
 await store.append(
   [{ type: 'OrderShipped', data: { orderId, shippedAt: new Date().toISOString() } }],
-  { failIfEventsMatch: orderQuery, after: version }
+  { failIfEventsMatch: orderQuery, after: position }
 );
 ```
 
 **Concurrency control:**  
-The `failIfEventsMatch` condition checks whether any events matching the query exist after the specified `after` position. If they do, a `ConcurrencyError` is thrown. PostgreSQL advisory locks (acquired in sorted order by `(type, tag)` pairs) serialize concurrent writers, so `ConcurrencyError` indicates a true optimistic concurrency conflict, not lock contention.
+`load()` returns only **committed-visible** events, ordered by `(tx_id, global_position)`. Pass the full `position` (`StreamCursor`, including `readXmin`) to `after` — do not pass a bare `globalPosition`. Do not reuse `readXmin` from an older load with a newer event’s `txId` / `globalPosition`.
+
+`failIfEventsMatch` then checks whether any matching event appeared after that cursor (including a late commit of an older transaction). If so, a `ConcurrencyError` is thrown. PostgreSQL advisory locks (sorted `(type, tag)` pairs from the condition **and** the events being appended, plus `(*, tag)` for each tag) serialize overlapping writers. `ConcurrencyError` is an application-level condition failure, not lock contention. Lock timeout, deadlock, and serialization failure are separate typed errors (`LockTimeoutError`, `DeadlockError`, `SerializationFailureError`).
+
+An empty `append([])` throws `EmptyBatchError` before opening a transaction. Omitting `condition` is still atomic per batch but **does not** take DCB locks — do not use it to protect a business invariant.
 
 ### 4. Query events
 
@@ -123,8 +127,8 @@ const multiQuery = query([
 ]);
 const result = await store.load(multiQuery);
 
-console.log(result.events);    // StoredEvent[]
-console.log(result.version);   // bigint (max global_position)
+console.log(result.events);     // StoredEvent[] (committed-visible only)
+console.log(result.position);   // StreamCursor { txId, globalPosition, readXmin }
 ```
 
 **Query semantics:**
@@ -176,9 +180,20 @@ interface Query {
   items: readonly QueryItem[];  // OR across items
 }
 
+interface StreamCursor {
+  txId: string;
+  globalPosition: bigint;
+  readXmin?: string;  // snapshot xmin captured by load(); pass through to after
+}
+
+interface LoadResult {
+  events: StoredEvent[];
+  position: StreamCursor;  // commit-order-safe head for this query
+}
+
 interface AppendCondition {
   failIfEventsMatch: Query;
-  after?: bigint;  // fail if any matching event exists after this position
+  after?: StreamCursor;  // from load().position or STREAM_CURSOR_ORIGIN
 }
 ```
 
@@ -186,13 +201,34 @@ interface AppendCondition {
 
 ```typescript
 interface EventStore {
+  /** Atomic insert. Omit condition only when the batch is not protecting a decision. */
   append(events: NewEvent | NewEvent[], condition?: AppendCondition): Promise<StoredEvent[]>;
+  /** Committed-visible events, ordered by (tx_id, global_position). */
   load(query: Query): Promise<LoadResult>;
   stream(query: Query, options?: StreamOptions): AsyncIterable<StoredEvent>;
   initializeSchema(): Promise<void>;
   close(): Promise<void>;
 }
 ```
+
+### Errors
+
+| Error | When |
+| --- | --- |
+| `ConcurrencyError` | `failIfEventsMatch` found matching events after `after` (`expectedPosition` / `actualPosition` are `StreamCursor`s) |
+| `EmptyBatchError` | `append([])` — rejected before `BEGIN` |
+| `MissingTagExtractorError` | no extractor, no explicit tags, not `UNTAGGED` |
+| `InvalidTagError` | empty or whitespace tag (explicit or from an extractor) |
+| `LockTimeoutError` | PostgreSQL `55P03` (retryable) |
+| `DeadlockError` | PostgreSQL `40P01` (retryable) |
+| `SerializationFailureError` | PostgreSQL `40001` (retryable) |
+| `EventStoreError` | other store failures |
+| `ProjectionNotReadyError` | `waitUntilLive` saw `error`/`stopped`, or timed out |
+| `ProjectionSetupTimeoutError` | projection `setup()` exceeded `setupTimeoutMs` |
+
+Event `data` and `metadata` are stored and returned as recorded. The library does not upcast or rewrite payloads.
+
+See [`.docs/v2-migration.md`](.docs/v2-migration.md) for the v1 → v2 `version`/`after` change.
 
 ### Query Builders
 
@@ -211,7 +247,7 @@ const q2 = query([
 
 ### Combining Queries
 
-For command handlers that load multiple streams, use `combineQueries` to merge them into a single query and version:
+For command handlers that load multiple streams, use `combineQueries` to merge them into a single query and cursor:
 
 ```typescript
 import { query, combineQueries } from 'es-dcb-library';
@@ -237,14 +273,14 @@ function enrollmentStream(studentId: string, courseId: string) {
   ]);
 }
 
-// Load all three streams with a single version
+// Load all three streams with a single position
 const allStreams = combineQueries(
   studentStream('s1'),
   courseStream('c1'),
   enrollmentStream('s1', 'c1')
 );
 
-const { events, version } = await store.load(allStreams);
+const { events, position } = await store.load(allStreams);
 
 // Filter events for each reducer
 const studentEvents = events.filter(e => e.tags.includes('student:s1'));
@@ -253,14 +289,14 @@ const enrollmentEvents = events.filter(e =>
   e.tags.includes('student:s1') && e.tags.includes('course:c1')
 );
 
-// Reduce state, make decision, append with single version
+// Reduce state, make decision, append with the single load() cursor
 await store.append(newEvents, {
   failIfEventsMatch: allStreams,
-  after: version,
+  after: position,
 });
 ```
 
-**Why this matters**: Loading streams separately and picking `max(version1, version2, version3)` is error-prone. A single combined query ensures correct concurrency checking.
+**Why this matters**: Loading streams separately and picking `max(globalPosition)` is not a commit-order watermark. A single combined query plus `load().position` is the safe append condition.
 
 ### Tag Extractors
 
@@ -281,9 +317,11 @@ const store = new PostgresEventStore({ pool, tagExtractors });
 
 **Strict tag extraction**: By default, appending an event without a registered extractor and without explicit tags throws `MissingTagExtractorError`. This prevents silently storing untagged events that queries won't find.
 
+Slices can pass `tags` on the event without registering a global extractor. Empty or whitespace tags throw `InvalidTagError` (including tags produced by an extractor). Tag strings are part of the event contract: queries and DCB locks depend on them.
+
 **Three ways to tag events**:
 1. **Tag extractor**: Register a function for the event type
-2. **Explicit tags**: Pass `tags: [...]` in the event (merged with extractor output)
+2. **Explicit tags**: Pass `tags: [...]` in the event (merged with extractor output; no extractor required)
 3. **Mark as UNTAGGED**: Use the `UNTAGGED` symbol for types that intentionally have no tags
 
 ```typescript
@@ -343,10 +381,22 @@ const ordersProjection = defineProjection({
   }),
 });
 
-const manager = new ProjectionManager(store, pool, [ordersProjection]);
+const manager = new ProjectionManager({
+  pool,
+  store,
+  projections: [ordersProjection],
+});
 await manager.initialize();
-await manager.start();
+manager.start();
+await manager.waitUntilLive();
 ```
+
+**Readiness and progress:**
+- `waitUntilLive()` resolves only when every configured projection is `live`. Any `error` or `stopped` status (including a single-instance lock miss) throws `ProjectionNotReadyError`.
+- `waitForCursor(name, StreamCursor)` waits until the checkpoint is at or past the target in `(tx_id, global_position)` order — the same cursor as `load().position`.
+- `waitForPosition(name, bigint)` is a convenience on `last_position` only. It is **not** a commit-order watermark; a higher position can become visible before an older transaction commits.
+
+**Setup:** `setup()` runs with a PostgreSQL `statement_timeout`. If the JS timeout fires, the backend is cancelled (`pg_cancel_backend`) and the client is released only after setup settles. A timeout throws `ProjectionSetupTimeoutError`. The first LISTEN connect failure fails `initialize()` instead of being swallowed.
 
 **Key projection features:**
 - **Catch-up + live processing**: Each projection runs in a loop that first catches up from the `(tx_id, global_position)` checkpoint, then listens for live events via `LISTEN/NOTIFY`.
@@ -430,6 +480,8 @@ All design rationale and architecture decisions are in `.docs/`:
 | [`implementation-plan.md`](.docs/implementation-plan.md) | Task breakdown with test specs and status tracking |
 | [`university-app-plan.md`](.docs/university-app-plan.md) | University domain: events, commands, business rules, API |
 | [`projections-plan.md`](.docs/projections-plan.md) | Projections addon: loop design, gap-safety, API, schema |
+| [`v2-migration.md`](.docs/v2-migration.md) | v1 → v2 API: `position`, `EmptyBatchError`, projection readiness |
+| [`benchmarks.md`](.docs/benchmarks.md) | Baseline throughput, latency, and query-plan notes |
 
 ---
 
@@ -467,6 +519,9 @@ npm run test:watch
 
 # Build
 npm run build  # Outputs ESM + CJS + .d.ts to dist/
+
+# Operational benchmarks (Docker / testcontainers; not part of CI)
+npm run bench
 ```
 
 ---
