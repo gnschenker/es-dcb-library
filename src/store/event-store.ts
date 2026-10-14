@@ -2,7 +2,7 @@ import pg from 'pg';
 import type { Query } from '../query/types.js';
 import type { NewEvent, StoredEvent, LoadResult, AppendCondition, StreamOptions, EventStore, TagExtractor } from '../types.js';
 import { UNTAGGED } from '../types.js';
-import { ConcurrencyError, EventStoreError, MissingTagExtractorError } from '../errors.js';
+import { ConcurrencyError, EventStoreError, MissingTagExtractorError, EmptyBatchError } from '../errors.js';
 import {
   compileLoadCommittedQuery,
   compileExistsQuery,
@@ -104,6 +104,9 @@ export class PostgresEventStore implements EventStore {
 
   async append(events: NewEvent | NewEvent[], condition?: AppendCondition): Promise<StoredEvent[]> {
     const eventList = Array.isArray(events) ? events : [events];
+    if (eventList.length === 0) {
+      throw new EmptyBatchError();
+    }
     const resolved = resolveAppendEvents(eventList, this.tagExtractors);
     const run = () => this.appendToDatabase(resolved, condition);
     if (this.appendTelemetry === undefined) {
@@ -190,11 +193,16 @@ export class PostgresEventStore implements EventStore {
       await client.query('COMMIT');
       return stored;
     } catch (err) {
-      if (!(err instanceof EventStoreError) && !(err instanceof ConcurrencyError) && !(err instanceof MissingTagExtractorError)) {
-        await client.query('ROLLBACK').catch(() => undefined);
-        throw new EventStoreError(`Failed to append events: ${String(err)}`, err);
+      await client.query('ROLLBACK').catch(() => undefined);
+      if (
+        err instanceof EventStoreError ||
+        err instanceof ConcurrencyError ||
+        err instanceof MissingTagExtractorError ||
+        err instanceof EmptyBatchError
+      ) {
+        throw err;
       }
-      throw err;
+      throw new EventStoreError(`Failed to append events: ${String(err)}`, err);
     } finally {
       client.release();
     }

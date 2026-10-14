@@ -30,6 +30,15 @@ export class EventStoreError extends Error {
   }
 }
 
+export class EmptyBatchError extends Error {
+  override readonly name = 'EmptyBatchError';
+
+  constructor(message?: string) {
+    super(message ?? 'Cannot append an empty batch');
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
 export class MissingTagExtractorError extends Error {
   override readonly name = 'MissingTagExtractorError';
 
