@@ -13,10 +13,20 @@ describe('Public API exports', () => {
   });
 
   it('exports error classes', async () => {
-    const { ConcurrencyError, EventStoreError, EmptyBatchError } = await import('../../src/index.js');
+    const {
+      ConcurrencyError,
+      EventStoreError,
+      EmptyBatchError,
+      InvalidTagError,
+      LockTimeoutError,
+      ProjectionNotReadyError,
+    } = await import('../../src/index.js');
     expect(ConcurrencyError).toBeDefined();
     expect(EventStoreError).toBeDefined();
     expect(EmptyBatchError).toBeDefined();
+    expect(InvalidTagError).toBeDefined();
+    expect(LockTimeoutError).toBeDefined();
+    expect(ProjectionNotReadyError).toBeDefined();
   });
 
   it('exports observability helpers', async () => {

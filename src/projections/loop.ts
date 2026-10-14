@@ -313,7 +313,7 @@ export class ManagedListenClient {
   }
 
   async start(): Promise<void> {
-    await this.connect();
+    await this.connect({ throwOnFailure: true });
   }
 
   async stop(): Promise<void> {
@@ -329,7 +329,7 @@ export class ManagedListenClient {
     }
   }
 
-  private async connect(): Promise<void> {
+  private async connect(options: { throwOnFailure?: boolean } = {}): Promise<void> {
     if (this.stopped) return;
     const client = new pg.Client({ connectionString: this.connectionString });
 
@@ -359,6 +359,9 @@ export class ManagedListenClient {
     } catch (err) {
       console.error('[projections] LISTEN client connect failed:', err);
       try { await client.end(); } catch { /* swallow */ }
+      if (options.throwOnFailure) {
+        throw err;
+      }
       this.scheduleReconnect();
     }
   }

@@ -18,7 +18,19 @@ export type {
 
 export { UNTAGGED, STREAM_CURSOR_ORIGIN, eventStreamCursor } from './types.js';
 
-export { ConcurrencyError, EventStoreError, MissingTagExtractorError, EmptyBatchError } from './errors.js';
+export {
+  ConcurrencyError,
+  EventStoreError,
+  MissingTagExtractorError,
+  EmptyBatchError,
+  InvalidTagError,
+  LockTimeoutError,
+  DeadlockError,
+  SerializationFailureError,
+  ProjectionNotReadyError,
+  ProjectionSetupTimeoutError,
+  errorFromPg,
+} from './errors.js';
 
 export type { ObservabilityConfig, DcbObservability } from './observability/index.js';
 export {

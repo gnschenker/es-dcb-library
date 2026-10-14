@@ -3,3 +3,4 @@ export type { ProjectionDefinition, ProjectionHandler, ProjectionSetup, Dispatch
 export { ProjectionManager } from './manager.js';
 export type { ProjectionManagerConfig, ProjectionState } from './manager.js';
 export type { ProjectionStatus } from './loop.js';
+export { evaluateProjectionReadiness, cursorReached } from './readiness.js';
