@@ -13,9 +13,10 @@ describe('Public API exports', () => {
   });
 
   it('exports error classes', async () => {
-    const { ConcurrencyError, EventStoreError } = await import('../../src/index.js');
+    const { ConcurrencyError, EventStoreError, EmptyBatchError } = await import('../../src/index.js');
     expect(ConcurrencyError).toBeDefined();
     expect(EventStoreError).toBeDefined();
+    expect(EmptyBatchError).toBeDefined();
   });
 
   it('exports observability helpers', async () => {

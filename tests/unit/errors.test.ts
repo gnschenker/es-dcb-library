@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { ConcurrencyError, EventStoreError } from '../../src/errors.js';
+import { ConcurrencyError, EventStoreError, EmptyBatchError } from '../../src/errors.js';
 import { STREAM_CURSOR_ORIGIN } from '../../src/types.js';
 
 const cursor = (gp: bigint, txId = '1') => ({ txId, globalPosition: gp });
@@ -108,5 +108,20 @@ describe('EventStoreError', () => {
   it('has a stack trace', () => {
     const err = new EventStoreError('msg');
     expect(err.stack).toBeDefined();
+  });
+});
+
+describe('EmptyBatchError', () => {
+  it('has correct name and default message', () => {
+    const err = new EmptyBatchError();
+    expect(err).toBeInstanceOf(EmptyBatchError);
+    expect(err).toBeInstanceOf(Error);
+    expect(err.name).toBe('EmptyBatchError');
+    expect(err.message).toBe('Cannot append an empty batch');
+  });
+
+  it('uses a custom message when provided', () => {
+    const err = new EmptyBatchError('no events');
+    expect(err.message).toBe('no events');
   });
 });
