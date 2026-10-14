@@ -150,7 +150,7 @@ export async function enrollStudent(
   );
   
   // Load once with a single version
-  const { events, version } = await store.load(allStreams);
+  const { events, position } = await store.load(allStreams);
   
   const studentTag = `student:${input.studentId}`;
   const courseTag = `course:${input.courseId}`;
@@ -218,7 +218,7 @@ export async function enrollStudent(
     [{ type: 'StudentEnrolled', data: data as unknown as Record<string, unknown>} as NewEvent],
     {
       failIfEventsMatch: allStreams,
-      after: version,
+      after: position,
     },
   );
 }

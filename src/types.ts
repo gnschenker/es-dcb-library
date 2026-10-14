@@ -12,6 +12,12 @@ export interface StreamCursor {
   /** PostgreSQL xid8 of the inserting transaction (string from pg driver). */
   txId: string;
   globalPosition: bigint;
+  /**
+   * Snapshot `pg_snapshot_xmin` captured at `load()` time. Present on `load().position`;
+   * used by append `after` to detect late commits below the watermark without re-matching
+   * events that were already visible when the cursor was taken.
+   */
+  readXmin?: string;
 }
 
 /** Start cursor: before any event in (tx_id, global_position) order. */
@@ -31,12 +37,22 @@ export interface StoredEvent<D = Record<string, unknown>> {
 
 export interface LoadResult {
   events: StoredEvent[];
-  version: bigint;
+  /**
+   * Commit-order-safe stream head for this query (same visibility as `committedOnly` streams).
+   * Pass to `append({ after: position })` after `load()`.
+   */
+  position: StreamCursor;
 }
 
 export interface AppendCondition {
   failIfEventsMatch: Query;
-  after?: bigint;
+  /** Commit-order-safe cursor from `load().position` (or `STREAM_CURSOR_ORIGIN`). */
+  after?: StreamCursor;
+}
+
+/** Cursor for a stored event (for tests and manual append conditions). */
+export function eventStreamCursor(event: StoredEvent): StreamCursor {
+  return { txId: event.txId, globalPosition: event.globalPosition };
 }
 
 export interface StreamOptions {

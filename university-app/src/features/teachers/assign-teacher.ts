@@ -65,7 +65,7 @@ export async function assignTeacher(
     teacherStream(input.teacherId),
   );
   
-  const { events, version } = await store.load(allStreams);
+  const { events, position } = await store.load(allStreams);
   
   const courseEvents = events.filter(e => e.tags.includes(`course:${input.courseId}`));
   const teacherEvents = events.filter(e => e.tags.includes(`teacher:${input.teacherId}`));
@@ -96,6 +96,6 @@ export async function assignTeacher(
 
   await store.append(
     [{ type: 'TeacherAssignedToCourse', data: data as unknown as Record<string, unknown>} as NewEvent],
-    { failIfEventsMatch: allStreams, after: version },
+    { failIfEventsMatch: allStreams, after: position },
   );
 }

@@ -41,7 +41,7 @@ beforeEach(() => {
 
 function makeMockStore(overrides: Partial<EventStore> = {}): EventStore {
   return {
-    load: vi.fn().mockResolvedValue({ events: [], version: 0n }),
+    load: vi.fn().mockResolvedValue({ events: [], position: { txId: "0", globalPosition: 0n } }),
     append: vi.fn().mockResolvedValue([]),
     stream: vi.fn().mockReturnValue((async function* () {})()),
     initializeSchema: vi.fn().mockResolvedValue(undefined),
@@ -327,7 +327,7 @@ describe('enrollStudent command', () => {
       load: vi.fn()
         .mockResolvedValueOnce({ 
           events: [...registeredStudentEvents, ...openCourseEvents], 
-          version: 2n 
+          position: { txId: "1", globalPosition: 2n } 
         }),
     });
     await enrollStudent(store, systemClock, { studentId: 's1', courseId: 'c1' });
@@ -339,7 +339,7 @@ describe('enrollStudent command', () => {
   it('throws StudentNotFoundError when student not registered', async () => {
     const store = makeMockStore({
       load: vi.fn()
-        .mockResolvedValueOnce({ events: openCourseEvents, version: 2n }),
+        .mockResolvedValueOnce({ events: openCourseEvents, position: { txId: "1", globalPosition: 2n } }),
     });
     await expect(enrollStudent(store, systemClock, { studentId: 's1', courseId: 'c1' }))
       .rejects.toThrow(StudentNotFoundError);
@@ -348,7 +348,7 @@ describe('enrollStudent command', () => {
   it('throws CourseNotFoundError when course does not exist', async () => {
     const store = makeMockStore({
       load: vi.fn()
-        .mockResolvedValueOnce({ events: registeredStudentEvents, version: 1n }),
+        .mockResolvedValueOnce({ events: registeredStudentEvents, position: { txId: "1", globalPosition: 1n } }),
     });
     await expect(enrollStudent(store, systemClock, { studentId: 's1', courseId: 'nonexistent' }))
       .rejects.toThrow(CourseNotFoundError);
@@ -358,7 +358,7 @@ describe('enrollStudent command', () => {
     const draftCourse = [makeEvent('CourseCreated', { courseId: 'c1', title: 'Intro', semester: 'F24', creditHours: 3, maxStudents: 30, prerequisites: [], passingGrade: 60, dropDeadline: '2030-09-15', withdrawalDeadline: '2030-10-15' })];
     const store = makeMockStore({
       load: vi.fn()
-        .mockResolvedValueOnce({ events: [...registeredStudentEvents, ...draftCourse], version: 1n }),
+        .mockResolvedValueOnce({ events: [...registeredStudentEvents, ...draftCourse], position: { txId: "1", globalPosition: 1n } }),
     });
     await expect(enrollStudent(store, systemClock, { studentId: 's1', courseId: 'c1' }))
       .rejects.toThrow(CourseNotOpenError);
@@ -368,7 +368,7 @@ describe('enrollStudent command', () => {
     const enrolledEvents = [makeEvent('StudentEnrolled', { studentId: 's1', courseId: 'c1', enrolledAt: '2024-01-01T00:00:00Z' })];
     const store = makeMockStore({
       load: vi.fn()
-        .mockResolvedValueOnce({ events: [...registeredStudentEvents, ...openCourseEvents, ...enrolledEvents], version: 2n }),
+        .mockResolvedValueOnce({ events: [...registeredStudentEvents, ...openCourseEvents, ...enrolledEvents], position: { txId: "1", globalPosition: 2n } }),
     });
     await expect(enrollStudent(store, systemClock, { studentId: 's1', courseId: 'c1' }))
       .rejects.toThrow(StudentAlreadyEnrolledError);
@@ -382,7 +382,7 @@ describe('enrollStudent command', () => {
     const existingEnrollment = [makeEvent('StudentEnrolled', { studentId: 's2', courseId: 'c1', enrolledAt: '2024-01-01T00:00:00Z' })];
     const store = makeMockStore({
       load: vi.fn()
-        .mockResolvedValueOnce({ events: [...registeredStudentEvents, ...fullCourseEvents, ...existingEnrollment], version: 2n }),
+        .mockResolvedValueOnce({ events: [...registeredStudentEvents, ...fullCourseEvents, ...existingEnrollment], position: { txId: "1", globalPosition: 2n } }),
     });
     await expect(enrollStudent(store, systemClock, { studentId: 's1', courseId: 'c1' }))
       .rejects.toThrow(EnrollmentFullError);
@@ -395,7 +395,7 @@ describe('enrollStudent command', () => {
     ];
     const store = makeMockStore({
       load: vi.fn()
-        .mockResolvedValueOnce({ events: [...registeredStudentEvents, ...prereqCourse], version: 2n }),
+        .mockResolvedValueOnce({ events: [...registeredStudentEvents, ...prereqCourse], position: { txId: "1", globalPosition: 2n } }),
     });
     await expect(enrollStudent(store, systemClock, { studentId: 's1', courseId: 'c1' }))
       .rejects.toThrow(PrerequisiteNotSatisfiedError);
@@ -413,7 +413,7 @@ describe('unenrollStudent command', () => {
   it('appends StudentDropped when before drop deadline', async () => {
     const store = makeMockStore({
       load: vi.fn()
-        .mockResolvedValueOnce({ events: [...enrolledEvents, ...openCourseEvents], version: 2n }),
+        .mockResolvedValueOnce({ events: [...enrolledEvents, ...openCourseEvents], position: { txId: "1", globalPosition: 2n } }),
     });
     await unenrollStudent(store, systemClock, { studentId: 's1', courseId: 'c1', reason: 'personal', unenrolledBy: 's1' });
     expect(store.append).toHaveBeenCalledOnce();
@@ -428,7 +428,7 @@ describe('unenrollStudent command', () => {
     ];
     const store = makeMockStore({
       load: vi.fn()
-        .mockResolvedValueOnce({ events: [...enrolledEvents, ...pastDropCourse], version: 2n }),
+        .mockResolvedValueOnce({ events: [...enrolledEvents, ...pastDropCourse], position: { txId: "1", globalPosition: 2n } }),
     });
     await unenrollStudent(store, systemClock, { studentId: 's1', courseId: 'c1', reason: 'personal', unenrolledBy: 's1' });
     const appendCall = vi.mocked(store.append).mock.calls[0] as unknown as [Array<{ type: string }>];
@@ -438,7 +438,7 @@ describe('unenrollStudent command', () => {
   it('throws StudentNotEnrolledError when not enrolled', async () => {
     const store = makeMockStore({
       load: vi.fn()
-        .mockResolvedValueOnce({ events: openCourseEvents, version: 2n }),
+        .mockResolvedValueOnce({ events: openCourseEvents, position: { txId: "1", globalPosition: 2n } }),
     });
     await expect(unenrollStudent(store, systemClock, { studentId: 's1', courseId: 'c1', reason: 'personal', unenrolledBy: 's1' }))
       .rejects.toThrow(StudentNotEnrolledError);
@@ -451,7 +451,7 @@ describe('unenrollStudent command', () => {
     ];
     const store = makeMockStore({
       load: vi.fn()
-        .mockResolvedValueOnce({ events: [...gradedEvents, ...openCourseEvents], version: 2n }),
+        .mockResolvedValueOnce({ events: [...gradedEvents, ...openCourseEvents], position: { txId: "1", globalPosition: 2n } }),
     });
     await expect(unenrollStudent(store, systemClock, { studentId: 's1', courseId: 'c1', reason: 'personal', unenrolledBy: 's1' }))
       .rejects.toThrow(StudentAlreadyGradedError);
@@ -464,7 +464,7 @@ describe('unenrollStudent command', () => {
     ];
     const store = makeMockStore({
       load: vi.fn()
-        .mockResolvedValueOnce({ events: [...enrolledEvents, ...pastDeadlineCourse], version: 2n }),
+        .mockResolvedValueOnce({ events: [...enrolledEvents, ...pastDeadlineCourse], position: { txId: "1", globalPosition: 2n } }),
     });
     await expect(unenrollStudent(store, systemClock, { studentId: 's1', courseId: 'c1', reason: 'personal', unenrolledBy: 's1' }))
       .rejects.toThrow(UnenrollAfterDeadlineError);
@@ -494,7 +494,7 @@ describe('gradeStudent command', () => {
       load: vi.fn()
         .mockResolvedValueOnce({
           events: [...enrolledEvents, ...openCourseEvents, ...hiredTeacherEvents],
-          version: 3n,
+          position: { txId: "1", globalPosition: 3n },
         }),
     });
     await gradeStudent(store, systemClock, { studentId: 's1', courseId: 'c1', grade: 75, gradedBy: 't1' });
@@ -508,7 +508,7 @@ describe('gradeStudent command', () => {
       load: vi.fn()
         .mockResolvedValueOnce({
           events: [...enrolledEvents, ...openCourseEvents, ...hiredTeacherEvents],
-          version: 3n,
+          position: { txId: "1", globalPosition: 3n },
         }),
     });
     await gradeStudent(store, systemClock, { studentId: 's1', courseId: 'c1', grade: 45, gradedBy: 't1' });
@@ -522,7 +522,7 @@ describe('gradeStudent command', () => {
       load: vi.fn()
         .mockResolvedValueOnce({
           events: [...openCourseEvents, ...hiredTeacherEvents],
-          version: 3n,
+          position: { txId: "1", globalPosition: 3n },
         }),
     });
     await expect(gradeStudent(store, systemClock, { studentId: 's1', courseId: 'c1', grade: 75, gradedBy: 't1' }))
@@ -538,7 +538,7 @@ describe('gradeStudent command', () => {
       load: vi.fn()
         .mockResolvedValueOnce({
           events: [...gradedEvents, ...openCourseEvents, ...hiredTeacherEvents],
-          version: 3n,
+          position: { txId: "1", globalPosition: 3n },
         }),
     });
     await expect(gradeStudent(store, systemClock, { studentId: 's1', courseId: 'c1', grade: 75, gradedBy: 't1' }))
@@ -550,7 +550,7 @@ describe('gradeStudent command', () => {
       load: vi.fn()
         .mockResolvedValueOnce({
           events: [...enrolledEvents, ...openCourseEvents, ...hiredTeacherEvents],
-          version: 3n,
+          position: { txId: "1", globalPosition: 3n },
         }),
     });
     await expect(gradeStudent(store, systemClock, { studentId: 's1', courseId: 'c1', grade: 75, gradedBy: 'wrong-teacher' }))
@@ -566,7 +566,7 @@ describe('gradeStudent command', () => {
       load: vi.fn()
         .mockResolvedValueOnce({
           events: [...enrolledEvents, ...openCourseEvents, ...dismissedTeacherEvents],
-          version: 3n,
+          position: { txId: "1", globalPosition: 3n },
         }),
     });
     await expect(gradeStudent(store, systemClock, { studentId: 's1', courseId: 'c1', grade: 75, gradedBy: 't1' }))
@@ -578,7 +578,7 @@ describe('gradeStudent command', () => {
       load: vi.fn()
         .mockResolvedValueOnce({
           events: [...enrolledEvents, ...openCourseEvents, ...hiredTeacherEvents],
-          version: 3n,
+          position: { txId: "1", globalPosition: 3n },
         }),
     });
     await gradeStudent(store, systemClock, { studentId: 's1', courseId: 'c1', grade: 60, gradedBy: 't1' });
@@ -591,7 +591,7 @@ describe('gradeStudent command', () => {
       load: vi.fn()
         .mockResolvedValueOnce({
           events: [...enrolledEvents, ...openCourseEvents, ...hiredTeacherEvents],
-          version: 3n,
+          position: { txId: "1", globalPosition: 3n },
         }),
     });
     await gradeStudent(store, systemClock, { studentId: 's1', courseId: 'c1', grade: 59, gradedBy: 't1' });

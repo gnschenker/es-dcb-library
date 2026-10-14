@@ -24,7 +24,7 @@ beforeEach(() => {
 
 function makeMockStore(overrides: Partial<EventStore> = {}): EventStore {
   return {
-    load: vi.fn().mockResolvedValue({ events: [], version: 0n }),
+    load: vi.fn().mockResolvedValue({ events: [], position: { txId: "0", globalPosition: 0n } }),
     append: vi.fn().mockResolvedValue([]),
     stream: vi.fn().mockReturnValue((async function* () {})()),
     initializeSchema: vi.fn().mockResolvedValue(undefined),
@@ -73,7 +73,7 @@ describe('reduceTeacher (hire-teacher slice)', () => {
 describe('hireTeacher command', () => {
   it('appends TeacherHired event on success', async () => {
     const store = makeMockStore({
-      load: vi.fn().mockResolvedValue({ events: [], version: 0n }),
+      load: vi.fn().mockResolvedValue({ events: [], position: { txId: "0", globalPosition: 0n } }),
     });
     const result = await hireTeacher(store, systemClock, { name: 'Dr. Smith', email: 'smith@uni.edu', department: 'CS' });
     expect(result.teacherId).toBeTypeOf('string');
@@ -86,7 +86,7 @@ describe('hireTeacher command', () => {
     const store = makeMockStore({
       load: vi.fn().mockResolvedValue({
         events: [makeEvent('TeacherHired', { teacherId: 't1', name: 'Dr. Smith', email: 'smith@uni.edu', department: 'CS', hiredAt: '2024-01-01T00:00:00Z' })],
-        version: 1n,
+        position: { txId: "1", globalPosition: 1n },
       }),
     });
     await expect(hireTeacher(store, systemClock, { name: 'Dr. Smith', email: 'smith@uni.edu', department: 'CS' }))
@@ -95,11 +95,11 @@ describe('hireTeacher command', () => {
 
   it('uses same teacherId for same email (deterministic)', async () => {
     const store = makeMockStore({
-      load: vi.fn().mockResolvedValue({ events: [], version: 0n }),
+      load: vi.fn().mockResolvedValue({ events: [], position: { txId: "0", globalPosition: 0n } }),
     });
     const r1 = await hireTeacher(store, systemClock, { name: 'A', email: 'same@email.com', department: 'CS' });
     const store2 = makeMockStore({
-      load: vi.fn().mockResolvedValue({ events: [], version: 0n }),
+      load: vi.fn().mockResolvedValue({ events: [], position: { txId: "0", globalPosition: 0n } }),
     });
     const r2 = await hireTeacher(store2, systemClock, { name: 'B', email: 'SAME@email.com', department: 'Math' });
     expect(r1.teacherId).toBe(r2.teacherId);
@@ -230,7 +230,7 @@ describe('reduceEnrollmentForRemove', () => {
 describe('dismissTeacher command', () => {
   it('throws TeacherNotFoundError when teacher does not exist', async () => {
     const store = makeMockStore({
-      load: vi.fn().mockResolvedValue({ events: [], version: 0n }),
+      load: vi.fn().mockResolvedValue({ events: [], position: { txId: "0", globalPosition: 0n } }),
     });
     await expect(dismissTeacher(store, systemClock, { teacherId: 't1', reason: 'cuts' }))
       .rejects.toThrow(TeacherNotFoundError);
@@ -243,7 +243,7 @@ describe('dismissTeacher command', () => {
           makeEvent('TeacherHired', { teacherId: 't1', name: 'Dr. Smith', email: 's@u.edu', department: 'CS', hiredAt: '2024-01-01T00:00:00Z' }),
           makeEvent('TeacherDismissed', { teacherId: 't1', reason: 'prior', dismissedAt: '2024-02-01T00:00:00Z' }),
         ],
-        version: 2n,
+        position: { txId: "1", globalPosition: 2n },
       }),
     });
     await expect(dismissTeacher(store, systemClock, { teacherId: 't1', reason: 'again' }))
@@ -254,7 +254,7 @@ describe('dismissTeacher command', () => {
     const store = makeMockStore({
       load: vi.fn().mockResolvedValue({
         events: [makeEvent('TeacherHired', { teacherId: 't1', name: 'Dr. Smith', email: 's@u.edu', department: 'CS', hiredAt: '2024-01-01T00:00:00Z' })],
-        version: 1n,
+        position: { txId: "1", globalPosition: 1n },
       }),
       stream: vi.fn().mockReturnValue((async function* () {})()),
     });

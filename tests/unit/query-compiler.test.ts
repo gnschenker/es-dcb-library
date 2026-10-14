@@ -1,10 +1,16 @@
 import { describe, it, expect } from 'vitest';
 import {
   compileLoadQuery,
-  compileVersionCheckQuery,
+  compileLoadCommittedQuery,
+  compileTailCommittedCursorQuery,
+  mergeLockPairs,
+  withWildcardTagLocks,
+  extractLockPairsFromEvents,
   compileStreamQuery,
   compileCommittedStreamQuery,
   compileExistsQuery,
+  compileStreamTagExistsQuery,
+  streamTagsFromQuery,
   extractLockPairs,
 } from '../../src/query/compiler.js';
 import { query, queryAll, queryItem } from '../../src/query/builder.js';
@@ -75,16 +81,24 @@ describe('compileLoadQuery()', () => {
   });
 });
 
-describe('compileVersionCheckQuery()', () => {
-  it('compiles to COALESCE(MAX(global_position), 0)', () => {
+describe('compileLoadCommittedQuery()', () => {
+  it('filters committed rows and orders by (tx_id, global_position)', () => {
     const q = queryItem({ types: ['EventA'] });
-    const { sql, params } = compileVersionCheckQuery(q);
-    
-    expect(sql).toContain('SELECT COALESCE(MAX(global_position), 0) AS max_pos');
-    expect(sql).toContain('FROM events');
-    expect(sql).toContain('WHERE');
-    expect(sql).not.toContain('ORDER BY');
+    const { sql, params } = compileLoadCommittedQuery(q);
+
+    expect(sql).toContain('tx_id < pg_snapshot_xmin(pg_current_snapshot())');
+    expect(sql).toContain('ORDER BY tx_id ASC, global_position ASC');
     expect(params).toEqual([['EventA']]);
+  });
+});
+
+describe('compileTailCommittedCursorQuery()', () => {
+  it('selects tail committed cursor', () => {
+    const q = queryItem({ types: ['EventA'] });
+    const { sql } = compileTailCommittedCursorQuery(q);
+
+    expect(sql).toContain('ORDER BY tx_id DESC, global_position DESC');
+    expect(sql).toContain('LIMIT 1');
   });
 });
 
@@ -138,13 +152,21 @@ describe('compileExistsQuery()', () => {
     expect(params).toEqual([['EventA']]);
   });
 
-  it('includes position constraint when after is specified', () => {
+  it('includes commit-safe cursor constraint when after is specified', () => {
     const q = queryItem({ types: ['EventA'] });
-    const { sql, params } = compileExistsQuery(q, 42n);
-    
-    expect(sql).toContain('global_position > $2');
-    expect(params).toHaveLength(2);
-    expect(params[1]).toBe(42n);
+    const { sql, params } = compileExistsQuery(q, {
+      txId: '99',
+      globalPosition: 42n,
+      readXmin: '1000',
+    });
+
+    expect(sql).toContain('(tx_id, global_position) > ($2::xid8, $3)');
+    expect(sql).toContain('global_position < $3');
+    expect(sql).toContain('tx_id >= $4::xid8');
+    expect(params).toHaveLength(4);
+    expect(params[1]).toBe('99');
+    expect(params[2]).toBe(42n);
+    expect(params[3]).toBe('1000');
   });
 });
 
@@ -212,11 +234,56 @@ describe('extractLockPairs()', () => {
   it('handles multiple types and tags (Cartesian product)', () => {
     const q = queryItem({ types: ['A', 'B'], tags: ['t1', 't2'] });
     const pairs = extractLockPairs(q);
-    
+
     expect(pairs).toHaveLength(4);
     expect(pairs).toContainEqual({ type: 'A', tag: 't1' });
     expect(pairs).toContainEqual({ type: 'A', tag: 't2' });
     expect(pairs).toContainEqual({ type: 'B', tag: 't1' });
     expect(pairs).toContainEqual({ type: 'B', tag: 't2' });
+  });
+});
+
+describe('mergeLockPairs()', () => {
+  it('unions query and event lock pairs', () => {
+    const fromQuery = extractLockPairs(queryItem({ types: ['EventAlpha'], tags: ['t'] }));
+    const fromEvents = extractLockPairsFromEvents([{ type: 'EventBeta', tags: ['t'] }]);
+    const merged = mergeLockPairs(fromQuery, fromEvents);
+
+    expect(merged).toEqual([
+      { type: 'EventAlpha', tag: 't' },
+      { type: 'EventBeta', tag: 't' },
+    ]);
+  });
+});
+
+describe('compileStreamTagExistsQuery()', () => {
+  it('uses global_position for tag stream invalidation', () => {
+    const { sql, params } = compileStreamTagExistsQuery('my-tag', {
+      txId: '1',
+      globalPosition: 5n,
+      readXmin: '99',
+    });
+    expect(sql).toContain('tags @> $1');
+    expect(sql).toContain('global_position > $2');
+    expect(sql).not.toContain('readXmin');
+    expect(sql).not.toContain('tx_id, global_position');
+    expect(params).toEqual([['my-tag'], 5n]);
+  });
+});
+
+describe('streamTagsFromQuery()', () => {
+  it('returns distinct tags from lock pairs', () => {
+    expect(streamTagsFromQuery(queryItem({ types: ['A'], tags: ['t1', 't2'] }))).toEqual(['t1', 't2']);
+  });
+});
+
+describe('withWildcardTagLocks()', () => {
+  it('adds (*, tag) for each distinct tag', () => {
+    const merged = mergeLockPairs(
+      extractLockPairs(queryItem({ types: ['EventAlpha'], tags: ['t'] })),
+      extractLockPairsFromEvents([{ type: 'EventBeta', tags: ['t'] }]),
+    );
+    const locked = withWildcardTagLocks(merged);
+    expect(locked).toContainEqual({ type: '*', tag: 't' });
   });
 });

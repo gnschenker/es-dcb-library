@@ -80,7 +80,7 @@ export async function closeCourse(
     courseEnrollmentStream(input.courseId),
   );
   
-  const { events, version } = await store.load(allStreams);
+  const { events, position } = await store.load(allStreams);
   
   const courseEvents = events.filter(e => 
     e.tags.includes(`course:${input.courseId}`) &&
@@ -125,6 +125,6 @@ export async function closeCourse(
 
   await store.append(
     [{ type: 'CourseClosed', data: data as unknown as Record<string, unknown>} as NewEvent],
-    { failIfEventsMatch: allStreams, after: version },
+    { failIfEventsMatch: allStreams, after: position },
   );
 }

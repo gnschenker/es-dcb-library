@@ -93,7 +93,7 @@ export async function unenrollStudent(
     courseStream(input.courseId),
   );
   
-  const { events, version } = await store.load(allStreams);
+  const { events, position } = await store.load(allStreams);
   
   const enrollmentEvents = events.filter(e => 
     e.tags.includes(`student:${input.studentId}`) && e.tags.includes(`course:${input.courseId}`)
@@ -147,6 +147,6 @@ export async function unenrollStudent(
 
   await store.append(
     [event],
-    { failIfEventsMatch: allStreams, after: version },
+    { failIfEventsMatch: allStreams, after: position },
   );
 }

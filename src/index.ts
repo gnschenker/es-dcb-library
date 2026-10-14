@@ -16,7 +16,7 @@ export type {
   EventStore,
 } from './types.js';
 
-export { UNTAGGED, STREAM_CURSOR_ORIGIN } from './types.js';
+export { UNTAGGED, STREAM_CURSOR_ORIGIN, eventStreamCursor } from './types.js';
 
 export { ConcurrencyError, EventStoreError, MissingTagExtractorError } from './errors.js';
 

@@ -4,13 +4,19 @@ import type { NewEvent, StoredEvent, LoadResult, AppendCondition, StreamOptions,
 import { UNTAGGED } from '../types.js';
 import { ConcurrencyError, EventStoreError, MissingTagExtractorError } from '../errors.js';
 import {
-  compileLoadQuery,
+  compileLoadCommittedQuery,
   compileExistsQuery,
-  compileVersionCheckQuery,
+  compileTailCommittedCursorQuery,
   compileStreamQuery,
   compileCommittedStreamQuery,
   extractLockPairs,
+  extractLockPairsFromEvents,
+  mergeLockPairs,
+  withWildcardTagLocks,
+  compileStreamTagExistsQuery,
+  streamTagsFromQuery,
 } from '../query/compiler.js';
+import { resolveAppendEvents, type ResolvedAppendEvent } from './resolve-event-tags.js';
 import { applySchema } from './schema.js';
 import { mapRow } from './row-mapper.js';
 import { STREAM_CURSOR_ORIGIN } from '../types.js';
@@ -30,7 +36,7 @@ export interface EventStoreConfig {
    * Tag extractors per event type.
    * Called for each event to derive tags from the event data.
    * Tags are merged with event.tags (if present) and deduplicated.
-   * 
+   *
    * Use the UNTAGGED symbol to mark event types that are intentionally untagged:
    * @example
    * tagExtractors: {
@@ -66,35 +72,52 @@ export class PostgresEventStore implements EventStore {
   }
 
   async load(query: Query): Promise<LoadResult> {
-    const { sql, params } = compileLoadQuery(query);
+    const client = await this.pool.connect();
+    let readXmin: string;
     let result: pg.QueryResult;
     try {
-      result = await this.pool.query(sql, params as unknown[]);
+      await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ');
+      const xminResult = await client.query<{ xmin: string }>(
+        'SELECT pg_snapshot_xmin(pg_current_snapshot())::text AS xmin',
+      );
+      readXmin = xminResult.rows[0]!.xmin;
+      const { sql, params } = compileLoadCommittedQuery(query);
+      result = await client.query(sql, params as unknown[]);
+      await client.query('COMMIT');
     } catch (err) {
+      await client.query('ROLLBACK').catch(() => undefined);
       throw new EventStoreError(`Failed to load events: ${String(err)}`, err);
+    } finally {
+      client.release();
     }
     const events: StoredEvent[] = result.rows.map(mapRow);
-    const version: bigint = events.length > 0
-      ? events[events.length - 1]!.globalPosition
-      : 0n;
-    return { events, version };
+    const position: StreamCursor =
+      events.length > 0
+        ? {
+            txId: events[events.length - 1]!.txId,
+            globalPosition: events[events.length - 1]!.globalPosition,
+            readXmin,
+          }
+        : { ...STREAM_CURSOR_ORIGIN, readXmin };
+    return { events, position };
   }
 
   async append(events: NewEvent | NewEvent[], condition?: AppendCondition): Promise<StoredEvent[]> {
     const eventList = Array.isArray(events) ? events : [events];
-    const run = () => this.appendToDatabase(eventList, condition);
+    const resolved = resolveAppendEvents(eventList, this.tagExtractors);
+    const run = () => this.appendToDatabase(resolved, condition);
     if (this.appendTelemetry === undefined) {
       return run();
     }
     return this.appendTelemetry.runAppend(eventList, condition, async (hooks) => {
-      const stored = await this.appendToDatabase(eventList, condition, hooks);
+      const stored = await this.appendToDatabase(resolved, condition, hooks);
       hooks.onEventsStored(stored);
       return stored;
     });
   }
 
   private async appendToDatabase(
-    eventList: NewEvent[],
+    resolved: ResolvedAppendEvent[],
     condition: AppendCondition | undefined,
     hooks?: { runAcquireLocks: (pairCount: number, acquire: () => Promise<void>) => Promise<void> },
   ): Promise<StoredEvent[]> {
@@ -106,7 +129,12 @@ export class PostgresEventStore implements EventStore {
         await client.query("SET LOCAL lock_timeout = '5s'");
         await client.query("SET LOCAL statement_timeout = '30s'");
 
-        const lockPairs = extractLockPairs(condition.failIfEventsMatch);
+        const lockPairs = withWildcardTagLocks(
+          mergeLockPairs(
+            extractLockPairs(condition.failIfEventsMatch),
+            extractLockPairsFromEvents(resolved.map((r) => ({ type: r.event.type, tags: r.tags }))),
+          ),
+        );
         const acquireLocks = async () => {
           for (const { type, tag } of lockPairs) {
             const lockKey = `${type}:${tag}`;
@@ -120,49 +148,31 @@ export class PostgresEventStore implements EventStore {
           await acquireLocks();
         }
 
-        const { sql: existsSql, params: existsParams } = compileExistsQuery(
-          condition.failIfEventsMatch,
-          condition.after,
-        );
-        const existsResult = await client.query<{ exists: boolean }>(existsSql, existsParams as unknown[]);
-
-        if (existsResult.rows[0]!.exists) {
-          const { sql: versionSql, params: versionParams } = compileVersionCheckQuery(
+        const conditionViolated = await this.appendConditionViolated(client, condition);
+        if (conditionViolated) {
+          const { sql: tailSql, params: tailParams } = compileTailCommittedCursorQuery(
             condition.failIfEventsMatch,
           );
-          const versionResult = await client.query<{ max_pos: string }>(versionSql, versionParams as unknown[]);
-          const actualVersion = BigInt(versionResult.rows[0]!.max_pos);
+          const tailResult = await client.query<{ tx_id: string; global_position: string }>(
+            tailSql,
+            tailParams as unknown[],
+          );
+          const tailRow = tailResult.rows[0];
+          const actualPosition: StreamCursor = tailRow
+            ? { txId: tailRow.tx_id, globalPosition: BigInt(tailRow.global_position) }
+            : STREAM_CURSOR_ORIGIN;
 
           await client.query('ROLLBACK');
           throw new ConcurrencyError(
-            condition.after ?? 0n,
-            actualVersion,
+            condition.after ?? STREAM_CURSOR_ORIGIN,
+            actualPosition,
             'Append condition failed: matching events exist after specified position',
           );
         }
       }
 
       const stored: StoredEvent[] = [];
-      for (const event of eventList) {
-        const eventTags = event.tags ?? [];
-        const extractorOrMarker = this.tagExtractors[event.type];
-
-        let extractedTags: string[] = [];
-
-        if (extractorOrMarker === UNTAGGED) {
-          extractedTags = [];
-        } else if (typeof extractorOrMarker === 'function') {
-          extractedTags = extractorOrMarker(event);
-        } else if (eventTags.length === 0) {
-          throw new MissingTagExtractorError(
-            event.type,
-            `Event type '${event.type}' has no registered tag extractor and no explicit tags were provided. ` +
-            `Either register a tag extractor, mark it as UNTAGGED, or pass tags explicitly in the event.`,
-          );
-        }
-
-        const finalTags = [...new Set([...eventTags, ...extractedTags])];
-
+      for (const { event, tags: finalTags } of resolved) {
         const sql = `INSERT INTO events (type, data, metadata, tags)
         VALUES ($1, $2::jsonb, $3::jsonb, $4)
         RETURNING global_position, event_id, type, data, metadata, occurred_at, tags, tx_id`.trim();
@@ -239,5 +249,31 @@ export class PostgresEventStore implements EventStore {
 
   async close(): Promise<void> {
     await this.pool.end();
+  }
+
+  private async appendConditionViolated(
+    client: pg.PoolClient,
+    condition: AppendCondition,
+  ): Promise<boolean> {
+    const { sql, params } = compileExistsQuery(condition.failIfEventsMatch, condition.after);
+    const failIfResult = await client.query<{ exists: boolean }>(sql, params as unknown[]);
+    if (failIfResult.rows[0]!.exists) {
+      return true;
+    }
+
+    const streamTags = streamTagsFromQuery(condition.failIfEventsMatch);
+    // Cross-type races on one tag (single-item failIf): any event on that tag after the cursor.
+    // Multi-item / multi-tag conditions use typed failIf + locks only.
+    if (streamTags.length === 1 && condition.failIfEventsMatch.items.length === 1) {
+      const tagExists = compileStreamTagExistsQuery(streamTags[0]!, condition.after);
+      const tagResult = await client.query<{ exists: boolean }>(
+        tagExists.sql,
+        tagExists.params as unknown[],
+      );
+      if (tagResult.rows[0]!.exists) {
+        return true;
+      }
+    }
+    return false;
   }
 }

@@ -72,6 +72,7 @@ function compileWhereClause(
 
 /**
  * Compiles a Query into a full SELECT query ordered by global_position ASC.
+ * @deprecated Internal legacy shape; `PostgresEventStore.load()` uses committed-only ordering.
  */
 export function compileLoadQuery(query: Query): CompiledQuery {
   const params: unknown[] = [];
@@ -89,17 +90,39 @@ export function compileLoadQuery(query: Query): CompiledQuery {
 }
 
 /**
- * Compiles a Query into a version check query: SELECT COALESCE(MAX(global_position), 0).
+ * Load matching events visible under the committed-only rule, ordered by (tx_id, global_position).
  */
-export function compileVersionCheckQuery(query: Query): CompiledQuery {
+export function compileLoadCommittedQuery(query: Query): CompiledQuery {
   const params: unknown[] = [];
   const counter = { n: 0 };
   const whereClause = compileWhereClause(query, params, counter);
 
   const sql = [
-    'SELECT COALESCE(MAX(global_position), 0) AS max_pos',
+    `SELECT ${EVENT_SELECT_COLUMNS}`,
     'FROM events',
-    whereClause,
+    `${whereClause}`,
+    `AND tx_id < pg_snapshot_xmin(pg_current_snapshot())`,
+    'ORDER BY tx_id ASC, global_position ASC',
+  ].join('\n');
+
+  return { sql, params };
+}
+
+/**
+ * Tail (tx_id, global_position) among committed-visible rows matching the query.
+ */
+export function compileTailCommittedCursorQuery(query: Query): CompiledQuery {
+  const params: unknown[] = [];
+  const counter = { n: 0 };
+  const whereClause = compileWhereClause(query, params, counter);
+
+  const sql = [
+    'SELECT tx_id::text AS tx_id, global_position',
+    'FROM events',
+    `${whereClause}`,
+    `AND tx_id < pg_snapshot_xmin(pg_current_snapshot())`,
+    'ORDER BY tx_id DESC, global_position DESC',
+    'LIMIT 1',
   ].join('\n');
 
   return { sql, params };
@@ -174,23 +197,50 @@ export function compileCommittedStreamQuery(
 }
 
 /**
- * Compiles a Query into an existence check:
- * SELECT EXISTS (SELECT 1 FROM events WHERE <query> AND global_position > $after LIMIT 1)
- * 
- * Used for append condition: fails if any matching event exists after the specified position.
+ * Compiles a Query into an existence check for append conditions.
+ *
+ * When `after` is set, fails if a matching row exists that invalidates the optimistic cursor:
+ * - strictly after `(tx_id, global_position)`, or
+ * - with `global_position` less than the watermark (late commit of an older transaction).
  */
-export function compileExistsQuery(query: Query, after?: bigint): CompiledQuery {
+export interface ExistsQueryOptions {
+  /** Detect late commits below the watermark (uses `after.readXmin`). Default true. */
+  lateCommitHoles?: boolean;
+}
+
+export function compileExistsQuery(
+  query: Query,
+  after?: StreamCursor,
+  options: ExistsQueryOptions = {},
+): CompiledQuery {
   const params: unknown[] = [];
   const counter = { n: 0 };
   const whereClause = compileWhereClause(query, params, counter);
-  
+
+  const lateCommitHoles = options.lateCommitHoles ?? true;
+
   let positionClause = '';
   if (after !== undefined) {
-    params.push(after);
+    params.push(after.txId);
     counter.n += 1;
-    positionClause = ` AND global_position > $${counter.n}`;
+    const afterTxRef = `$${counter.n}`;
+
+    params.push(after.globalPosition);
+    counter.n += 1;
+    const afterPosRef = `$${counter.n}`;
+
+    if (lateCommitHoles && after.readXmin !== undefined) {
+      params.push(after.readXmin);
+      counter.n += 1;
+      const readXminRef = `$${counter.n}`;
+      positionClause =
+        ` AND ((tx_id, global_position) > (${afterTxRef}::xid8, ${afterPosRef})` +
+        ` OR (${afterPosRef} > 0 AND global_position < ${afterPosRef} AND tx_id >= ${readXminRef}::xid8))`;
+    } else {
+      positionClause = ` AND (tx_id, global_position) > (${afterTxRef}::xid8, ${afterPosRef})`;
+    }
   }
-  
+
   const sql = [
     'SELECT EXISTS (',
     '  SELECT 1',
@@ -199,8 +249,44 @@ export function compileExistsQuery(query: Query, after?: bigint): CompiledQuery 
     '  LIMIT 1',
     ') AS exists',
   ].join('\n');
-  
+
   return { sql, params };
+}
+
+/**
+ * Any row with `tags @> {tag}` that invalidates the append cursor on the shared tag stream.
+ * Uses `global_position` ordering (not `(tx_id, global_position)`), so multi-clause loads
+ * are not confused by tuple ordering across unrelated types on the same tag.
+ */
+export function compileStreamTagExistsQuery(tag: string, after?: StreamCursor): CompiledQuery {
+  const params: unknown[] = [[tag]];
+  const counter = { n: 1 };
+
+  let positionClause = '';
+  if (after !== undefined) {
+    params.push(after.globalPosition);
+    counter.n += 1;
+    const afterPosRef = `$${counter.n}`;
+    // Position-only: avoids false conflicts on multi-tag loads (tuple / xmin holes stay on failIf exists).
+    positionClause = ` AND global_position > ${afterPosRef}`;
+  }
+
+  const sql = [
+    'SELECT EXISTS (',
+    '  SELECT 1',
+    '  FROM events',
+    '  WHERE tags @> $1',
+    `${positionClause}`,
+    '  LIMIT 1',
+    ') AS exists',
+  ].join('\n');
+
+  return { sql, params };
+}
+
+/** Distinct non-empty tags referenced by a query’s lock pairs. */
+export function streamTagsFromQuery(query: Query): string[] {
+  return [...new Set(extractLockPairs(query).map((p) => p.tag).filter((t) => t !== ''))];
 }
 
 /**
@@ -231,12 +317,61 @@ export function extractLockPairs(query: Query): Array<{ type: string; tag: strin
     }
   }
   
-  // Parse back and sort
-  const result = Array.from(pairs).map(s => JSON.parse(s) as { type: string; tag: string });
-  result.sort((a, b) => {
+  const result = Array.from(pairs).map((s) => JSON.parse(s) as { type: string; tag: string });
+  return sortLockPairs(result);
+}
+
+function sortLockPairs(pairs: Array<{ type: string; tag: string }>): Array<{ type: string; tag: string }> {
+  pairs.sort((a, b) => {
     const typeCmp = a.type.localeCompare(b.type);
     return typeCmp !== 0 ? typeCmp : a.tag.localeCompare(b.tag);
   });
-  
-  return result;
+  return pairs;
+}
+
+/**
+ * Lock pairs for events being appended: Cartesian product of event type and each resolved tag.
+ */
+export function extractLockPairsFromEvents(
+  events: Array<{ type: string; tags: string[] }>,
+): Array<{ type: string; tag: string }> {
+  const pairs = new Set<string>();
+
+  for (const event of events) {
+    const tagsToLock = event.tags.length > 0 ? event.tags : [''];
+    for (const tag of tagsToLock) {
+      pairs.add(JSON.stringify({ type: event.type, tag }));
+    }
+  }
+
+  const result = Array.from(pairs).map((s) => JSON.parse(s) as { type: string; tag: string });
+  return sortLockPairs(result);
+}
+
+/**
+ * Union of lock pair lists (deduped, sorted).
+ */
+export function mergeLockPairs(
+  ...lists: Array<Array<{ type: string; tag: string }>>
+): Array<{ type: string; tag: string }> {
+  const pairs = new Set<string>();
+  for (const list of lists) {
+    for (const pair of list) {
+      pairs.add(JSON.stringify(pair));
+    }
+  }
+  const result = Array.from(pairs).map((s) => JSON.parse(s) as { type: string; tag: string });
+  return sortLockPairs(result);
+}
+
+/**
+ * Adds `('*', tag)` for every distinct tag so writers sharing a tag serialize
+ * even when their failIfEventsMatch / event types differ.
+ */
+export function withWildcardTagLocks(
+  pairs: Array<{ type: string; tag: string }>,
+): Array<{ type: string; tag: string }> {
+  const tags = new Set(pairs.map((p) => p.tag));
+  const wildcards = [...tags].map((tag) => ({ type: '*', tag }));
+  return mergeLockPairs(pairs, wildcards);
 }

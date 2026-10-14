@@ -131,7 +131,7 @@ export async function gradeStudent(
     teacherStream(input.gradedBy),
   );
   
-  const { events, version } = await store.load(allStreams);
+  const { events, position } = await store.load(allStreams);
   
   const enrollmentEvents = events.filter(e => 
     e.tags.includes(`student:${input.studentId}`) && e.tags.includes(`course:${input.courseId}`)
@@ -203,6 +203,6 @@ export async function gradeStudent(
         data: outcomePayload as unknown as Record<string, unknown>,
       } as NewEvent,
     ],
-    { failIfEventsMatch: allStreams, after: version },
+    { failIfEventsMatch: allStreams, after: position },
   );
 }

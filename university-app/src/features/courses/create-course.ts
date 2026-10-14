@@ -1,5 +1,5 @@
 import type { EventStore, StoredEvent, NewEvent } from 'es-dcb-library';
-import { query, queryItem } from 'es-dcb-library';
+import { query, STREAM_CURSOR_ORIGIN } from 'es-dcb-library';
 import type { Clock } from '../../domain/clock.js';
 import { newCourseId } from '../../domain/ids.js';
 import {
@@ -79,7 +79,7 @@ export async function createCourse(
 
   await store.append(
     [{ type: 'CourseCreated', data: data as unknown as Record<string, unknown>} as NewEvent],
-    { failIfEventsMatch: courseStream(courseId), after: 0n },
+    { failIfEventsMatch: courseStream(courseId), after: STREAM_CURSOR_ORIGIN },
   );
 
   return { courseId };

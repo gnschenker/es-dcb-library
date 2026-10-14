@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterAll } from 'vitest';
 import pg from 'pg';
-import { PostgresEventStore, queryItem } from '../../src/index.js';
+import { PostgresEventStore, queryItem, STREAM_CURSOR_ORIGIN } from '../../src/index.js';
 import { createTestOtelProviders } from '../helpers/otel-test-providers.js';
 import { assertSpanAttributesSafe, findSpan } from '../helpers/telemetry-assertions.js';
 import { createTestPool, resetDatabase } from './helpers.js';
@@ -54,7 +54,7 @@ describe('append OpenTelemetry (integration)', () => {
     await expect(
       store.append(
         { type: 'OrderCreated', data: {}, tags: ['order:o1'] },
-        { failIfEventsMatch: q, after: 0n },
+        { failIfEventsMatch: q, after: STREAM_CURSOR_ORIGIN },
       ),
     ).rejects.toThrow(/Append condition failed/);
 
