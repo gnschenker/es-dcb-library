@@ -30,6 +30,9 @@ npm run test:watch
 
 # Build the library (ESM + CJS + .d.ts)
 npm run build
+
+# Operational benchmarks (Docker / testcontainers; not part of CI)
+npm run bench
 ```
 
 The integration test suite starts a PostgreSQL 15 Docker container automatically. Docker must be running. First run is slower (image pull); subsequent runs reuse the cached image.
@@ -43,15 +46,14 @@ This is a TypeScript event sourcing library implementing the **DCB (Dynamic Cons
 ### Layer overview
 
 ```
-src/query/          Query DSL — pure TypeScript, no I/O
-  types.ts          Internal data model: QueryDefinition, Clause, FilterNode
-  builder.ts        Fluent immutable builder: ClauseBuilder / KeySelector / ValueSetter
-  query-object.ts   Public entry point: query.eventsOfType() / query.allEventsOfType()
-  compiler.ts       QueryDefinition → parameterized SQL strings + canonical lock key
+src/query/          Tag-based query API — pure TypeScript, no I/O
+  types.ts          Query / QueryItem (OR across items; AND of types/tags within an item)
+  builder.ts        query() / queryItem() / queryAll() / combineQueries()
+  compiler.ts       Query → parameterized SQL (committed load/stream/exists) + lock pairs
 
 src/
-  types.ts          Public domain types: NewEvent, StoredEvent, LoadResult, AppendOptions, StreamOptions, EventStore
-  errors.ts         ConcurrencyError, EventStoreError
+  types.ts          Public domain types: NewEvent, StoredEvent, LoadResult, AppendCondition, StreamCursor, EventStore
+  errors.ts         ConcurrencyError, EmptyBatchError, typed pg errors, projection errors
 
 src/store/
   schema.ts         DDL — applySchema(client): creates table + indexes + autovacuum settings
@@ -68,49 +70,60 @@ src/projections/    Projections addon — separate subpath export (es-dcb-librar
   manager.ts        ProjectionManager class
 ```
 
-### Query DSL
+### Query API
 
-`ClauseBuilder` is the central type — it implements `QueryDefinition` and is returned at every step of the chain. `.where`, `.and`, `.or` are **property getters** (not method calls) that return a `KeySelector`. Every `equals()` call returns a **new** immutable `ClauseBuilder` — existing instances are never mutated.
+Queries are tag-based (`query()`, `queryItem()`, `queryAll()`, `combineQueries()`). There is no payload-path fluent DSL.
 
 ```typescript
-query.eventsOfType('OrderCreated')
-  .where.key('customerId').equals('c1')
-  .and.key('region').equals('EU')
-  .eventsOfType('OrderShipped')
-    .where.key('orderId').equals('o1')
+const orderQuery = queryItem({
+  types: ['OrderCreated', 'OrderShipped'],
+  tags: [`order:${orderId}`],
+});
+
+const { events, position } = await store.load(orderQuery);
+await store.append(newEvents, { failIfEventsMatch: orderQuery, after: position });
 ```
 
-Multiple `.eventsOfType()` calls add clauses; at SQL level clauses are OR-ed together, so the above query returns events of both types.
+Items are OR-ed. Within an item, `types` is OR (empty = any type) and `tags` is AND (empty = any tags). `load()` returns only committed-visible events, ordered by `(tx_id, global_position)`. Always pass the full `position` (including `readXmin`) to `after`. `readXmin` is bound to that cursor (`txId < readXmin`); a stitched pair throws `InconsistentStreamCursorError`.
 
 ### Compiler
 
-`compiler.ts` has four functions:
-- `compileLoadQuery` — `SELECT ... ORDER BY global_position ASC`
-- `compileVersionCheckQuery` — `SELECT COALESCE(MAX(global_position),0)` (for concurrency check)
-- `compileStreamQuery` — load query + `AND global_position > $N LIMIT $M` (keyset pagination)
-- `compileCanonicalKey` — deterministic string for advisory lock hashing (clauses sorted, keys sorted)
+`compiler.ts` (committed path used by the store):
+- `compileLoadCommittedQuery` — `SELECT ... WHERE … AND tx_id < pg_snapshot_xmin(...) ORDER BY tx_id, global_position`
+- `compileExistsQuery` — append condition; includes late-commit holes when `after.readXmin` is set
+- `compileStreamTagExistsQuery` — single-item single-tag cross-type race
+- `compileCommittedStreamQuery` — keyset pagination on `(tx_id, global_position)`
+- `extractLockPairs` / `extractLockPairsFromEvents` / `withWildcardTagLocks` — sorted `(type, tag)` plus `(*, tag)`
 
-All use `$N`-style parameterization; parameters are returned alongside SQL.
+Legacy `compileLoadQuery` / `compileStreamQuery` (global_position order) remain for non-`committedOnly` streams. All use `$N`-style parameterization.
 
 ### Concurrency — advisory locks
 
-`append()` with `AppendOptions` serializes concurrent writers per logical stream using `pg_try_advisory_xact_lock(hashtext(canonicalKey))`. This is a **non-blocking** transaction-scoped lock — it either acquires immediately or returns `false` (→ `ConcurrencyError`). The lock is released automatically on `COMMIT`/`ROLLBACK`. This prevents the lost-update race that would exist under READ COMMITTED with a bare `SELECT MAX` check.
+Conditional `append()` serializes overlapping writers with **blocking** `pg_advisory_xact_lock(hashtext(type:tag))` on the union of:
+- `(type, tag)` pairs from `failIfEventsMatch`
+- `(type, tag)` pairs from the events being appended
+- `(*, tag)` for each distinct tag
 
-Transaction order inside `append()` with options:
-1. `SET LOCAL lock_timeout = '5s'` / `SET LOCAL statement_timeout = '30s'`
-2. `SELECT pg_try_advisory_xact_lock(...)` — if `false`, rollback + `ConcurrencyError`
-3. `SELECT COALESCE(MAX(global_position), 0)` — version check
-4. `INSERT ... RETURNING` for each event
-5. `COMMIT`
+Locks are taken in sorted order (deadlock avoidance), then the exists check runs. `ConcurrencyError` means the condition failed, not that the lock was busy. `lock_timeout` / deadlock / serialization failure map to `LockTimeoutError` / `DeadlockError` / `SerializationFailureError`.
+
+Transaction order inside conditional `append()`:
+1. Validate the batch (empty → `EmptyBatchError`; tags/extractors) **before** `BEGIN`
+2. `BEGIN` then `SET LOCAL lock_timeout = '5s'` / `SET LOCAL statement_timeout = '30s'`
+3. Acquire advisory locks
+4. `failIfEventsMatch` exists check (plus tag-stream exists when the condition is one item / one tag)
+5. `INSERT ... RETURNING` for each event
+6. `COMMIT` — every failure after `BEGIN` rolls back in a `finally`-safe path
+
+Omitting `condition` is atomic but does **not** take DCB locks.
 
 ### Streaming — keyset pagination
 
-`stream()` is an `AsyncGenerator` that issues repeated short `SELECT` queries (`AND global_position > $last LIMIT $batchSize`). There are no long-lived transactions and no server-side cursors — this is intentional to avoid holding the `xmin` horizon and blocking autovacuum.
+`stream()` issues repeated short `SELECT`s. `committedOnly: true` paginates on `(tx_id, global_position)` with `tx_id < pg_snapshot_xmin`. Legacy `afterPosition` streams use `global_position` only and can see out-of-order commits. No server-side cursors and no long-lived transactions — this avoids holding the `xmin` horizon and blocking autovacuum.
 
 ### Schema design notes
 
 - `idx_events_type` is **not created** — it is fully covered by the composite `idx_events_type_position (type, global_position)`
-- GIN index uses `jsonb_path_ops` (smaller and faster for `@>` containment queries than `jsonb_ops`)
+- GIN index is on `tags` (`array_ops`) for `@>` containment; event `data` is not indexed
 - GIN pending list is set to 64 MB to reduce write-amplification spikes at high insert rates
 - BRIN index on `occurred_at` is tiny and near-zero write cost (naturally correlated with insert order)
 - Autovacuum thresholds are tightened (`scale_factor=0.01`) — defaults are too permissive at OLTP rates
@@ -131,10 +144,13 @@ Transaction order inside `append()` with options:
 - **NOTIFY payload is empty string** — receiver unconditionally drains from `state.lastCursor`; no need to parse the payload
 - **Atomic handler + checkpoint** — `BEGIN → handler → UPDATE projection_checkpoints → COMMIT`; crash before COMMIT replays the event; handlers must be idempotent (`INSERT … ON CONFLICT DO UPDATE`)
 - **dryRun mode** — handler called in real transaction, but always rolled back; use for SQL validation without side effects
-- **singleInstance** — `pg_try_advisory_lock(hashtext(name))` (session-level, not transaction-scoped) on a dedicated `pg.Client`; client held for the life of the loop; released on `stop()` / `lockClient.end()`. Contrast with `append()` which uses `pg_try_advisory_xact_lock` (transaction-scoped, auto-released on COMMIT/ROLLBACK).
+- **singleInstance** — `pg_try_advisory_lock(hashtext(name))` (session-level, not transaction-scoped) on a dedicated `pg.Client`; client held for the life of the loop; released on `stop()` / `lockClient.end()`. Contrast with `append()` which uses blocking `pg_advisory_xact_lock` (transaction-scoped, auto-released on COMMIT/ROLLBACK).
 - **`applyProjectionSchema` is internal** — `src/projections/schema.ts` exports `applyProjectionSchema(client)` at the module level (used by `ProjectionManager.initialize()` and integration tests) but it is **not** re-exported from `src/projections/index.ts`. External consumers of `es-dcb-library/projections` cannot call it directly; schema application is managed entirely through `manager.initialize()`.
 - **`Promise.allSettled` in `stop()`** — crashed loop does not block shutdown of healthy loops
 - **Per-projection loops, not shared** — isolation: slow or errored projection does not delay others
+- **`waitUntilLive()`** — succeeds only when every projection is `live`; `error`/`stopped` throw `ProjectionNotReadyError`
+- **`waitForCursor()`** — `(tx_id, global_position)` watermark; `waitForPosition()` is last_position only
+- **Setup timeout** — `statement_timeout` + `pg_cancel_backend`; first LISTEN connect failure fails `initialize()`
 
 ---
 
@@ -256,7 +272,7 @@ Every feature (API endpoint → command handler → events) is a **self-containe
 - `src/projections/` — `ProjectionManager` wiring (infrastructure)
 
 **Defined inside each slice (never shared):**
-- Stream query builders (`query.eventsOfType(...)`) — every command handler defines its own
+- Stream query builders (`queryItem({ types, tags })`) — every command handler defines its own
 - Reducer functions — every command handler contains its own state-reduction logic
 - Any business-rule helpers specific to that command
 
@@ -287,3 +303,5 @@ All design documents are in `.docs/`:
 | `university-app-plan.md` | University app domain design: events, commands, business rules, API |
 | `university-implementation-plan.md` | University app task-by-task implementation plan |
 | `projections-plan.md` | Projections addon design: architecture, loop design, API, schema, tasks P-01–P-14 |
+| `v2-migration.md` | v1 → v2 API: `load().position`, `EmptyBatchError`, projection readiness |
+| `benchmarks.md` | Baseline throughput, latency, and query-plan observations |

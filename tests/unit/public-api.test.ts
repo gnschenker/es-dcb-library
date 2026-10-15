@@ -17,6 +17,7 @@ describe('Public API exports', () => {
       ConcurrencyError,
       EventStoreError,
       EmptyBatchError,
+      InconsistentStreamCursorError,
       InvalidTagError,
       LockTimeoutError,
       ProjectionNotReadyError,
@@ -24,6 +25,7 @@ describe('Public API exports', () => {
     expect(ConcurrencyError).toBeDefined();
     expect(EventStoreError).toBeDefined();
     expect(EmptyBatchError).toBeDefined();
+    expect(InconsistentStreamCursorError).toBeDefined();
     expect(InvalidTagError).toBeDefined();
     expect(LockTimeoutError).toBeDefined();
     expect(ProjectionNotReadyError).toBeDefined();

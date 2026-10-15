@@ -16,13 +16,14 @@ export type {
   EventStore,
 } from './types.js';
 
-export { UNTAGGED, STREAM_CURSOR_ORIGIN, eventStreamCursor } from './types.js';
+export { UNTAGGED, STREAM_CURSOR_ORIGIN, eventStreamCursor, isConsistentStreamCursor } from './types.js';
 
 export {
   ConcurrencyError,
   EventStoreError,
   MissingTagExtractorError,
   EmptyBatchError,
+  InconsistentStreamCursorError,
   InvalidTagError,
   LockTimeoutError,
   DeadlockError,
