@@ -319,12 +319,20 @@ export function lockKeyString(key: LockKey): string {
   }
 }
 
+/**
+ * Locale-independent UTF-16 code-unit order. `localeCompare` can reorder keys
+ * across processes and create deadlocks.
+ */
+export function compareLockKeyStrings(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
 function uniqueSortedKeys(keys: LockKey[]): LockKey[] {
   const map = new Map<string, LockKey>();
   for (const key of keys) {
     map.set(lockKeyString(key), key);
   }
-  return [...map.values()].sort((a, b) => lockKeyString(a).localeCompare(lockKeyString(b)));
+  return [...map.values()].sort((a, b) => compareLockKeyStrings(lockKeyString(a), lockKeyString(b)));
 }
 
 /**
@@ -396,5 +404,7 @@ export function compileAppendLockRequests(
     add(key, key.kind === 'all' ? 'shared' : 'exclusive');
   }
 
-  return [...byKey.values()].sort((a, b) => lockKeyString(a.key).localeCompare(lockKeyString(b.key)));
+  return [...byKey.values()].sort((a, b) =>
+    compareLockKeyStrings(lockKeyString(a.key), lockKeyString(b.key)),
+  );
 }

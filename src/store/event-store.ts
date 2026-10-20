@@ -54,6 +54,13 @@ export interface EventStoreConfig {
    * }
    */
   tagExtractors?: Record<string, TagExtractor | typeof UNTAGGED>;
+  /**
+   * Optional scheduler for advisory-lock acquisition on conditional append.
+   * `acquireNext` takes the next lock in sorted key order. The default calls
+   * it exactly `pairCount` times. Tests use this to hold a transaction open
+   * between locks (same contract as the telemetry `runAcquireLocks` hook).
+   */
+  runAcquireLocks?: (pairCount: number, acquireNext: () => Promise<void>) => Promise<void>;
 }
 
 export class PostgresEventStore implements EventStore {
@@ -61,6 +68,9 @@ export class PostgresEventStore implements EventStore {
   private readonly tagExtractors: Record<string, TagExtractor | typeof UNTAGGED>;
   private readonly observability: DcbObservability;
   private readonly appendTelemetry: AppendTelemetry | undefined;
+  private readonly runAcquireLocks:
+    | ((pairCount: number, acquireNext: () => Promise<void>) => Promise<void>)
+    | undefined;
 
   constructor(config: EventStoreConfig) {
     this.pool = config.pool;
@@ -69,6 +79,7 @@ export class PostgresEventStore implements EventStore {
     this.appendTelemetry = this.observability.enabled
       ? createAppendTelemetry(this.observability)
       : undefined;
+    this.runAcquireLocks = config.runAcquireLocks;
   }
 
   async initializeSchema(): Promise<void> {
@@ -162,12 +173,31 @@ export class PostgresEventStore implements EventStore {
           resolved.map((r) => ({ type: r.event.type, tags: r.tags })),
         );
         const acquireLocks = async () => {
-          for (const request of lockRequests) {
+          let nextIndex = 0;
+          const acquireNext = async () => {
+            const request = lockRequests[nextIndex];
+            if (request === undefined) {
+              throw new EventStoreError('runAcquireLocks called acquireNext too many times');
+            }
+            nextIndex += 1;
             const sql =
               request.mode === 'shared'
                 ? 'SELECT pg_advisory_xact_lock_shared(hashtext($1))'
                 : 'SELECT pg_advisory_xact_lock(hashtext($1))';
             await client.query(sql, [lockKeyString(request.key)]);
+          };
+          const schedule =
+            this.runAcquireLocks ??
+            (async (pairCount, next) => {
+              for (let i = 0; i < pairCount; i += 1) {
+                await next();
+              }
+            });
+          await schedule(lockRequests.length, acquireNext);
+          if (nextIndex !== lockRequests.length) {
+            throw new EventStoreError(
+              `runAcquireLocks acquired ${nextIndex} of ${lockRequests.length} locks`,
+            );
           }
         };
 

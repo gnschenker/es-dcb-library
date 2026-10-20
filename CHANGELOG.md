@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Advisory locks now key by tag (type ignored), by type when a condition has no tags, and by a global `all` key for match-all conditions. Each appended event takes exclusive tag and type locks plus a shared `all` lock (`pg_advisory_xact_lock_shared`). Writers whose conditions are written differently (for example `*:board:B1` vs `ChapterAdded:board:B1`) serialize, and a tagless type condition or `queryAll()` now collides with any matching append.
+- Advisory locks now key by tag (type ignored), by type when a condition has no tags, and by a global `all` key for match-all conditions. Each appended event takes exclusive tag and type locks plus a shared `all` lock (`pg_advisory_xact_lock_shared`). Writers whose conditions are written differently (for example `*:board:B1` vs `ChapterAdded:board:B1`) serialize, and a tagless type condition or `queryAll()` now collides with any matching append. A match-all condition takes exclusive `all`, so it serializes with every other **conditional** writer (unconditional `append()` still takes no DCB locks). Lock keys are acquired in locale-independent UTF-16 code-unit order.
 
 ## [1.0.0] - 2026-10-12
 

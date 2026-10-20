@@ -12,6 +12,7 @@ import {
   extractEventLockKeys,
   compileAppendLockRequests,
   lockKeyString,
+  compareLockKeyStrings,
 } from '../../src/query/compiler.js';
 import { query, queryAll, queryItem } from '../../src/query/builder.js';
 
@@ -170,6 +171,18 @@ describe('compileExistsQuery()', () => {
   });
 });
 
+describe('compareLockKeyStrings()', () => {
+  it('uses UTF-16 code-unit order, not localeCompare', () => {
+    expect(compareLockKeyStrings('A', 'a')).toBe(-1);
+    expect(compareLockKeyStrings('a', 'A')).toBe(1);
+    expect(compareLockKeyStrings('all', 'all')).toBe(0);
+    expect(compareLockKeyStrings('tag:A', 'tag:a')).toBe(-1);
+    // Would reorder under some locales if localeCompare were used.
+    expect(compareLockKeyStrings('tag:Z', 'tag:ä')).toBe(compareLockKeyStrings('Z', 'ä'));
+    expect(compareLockKeyStrings('tag:Z', 'tag:ä')).toBe('Z' < 'ä' ? -1 : 1);
+  });
+});
+
 describe('extractConditionLockKeys()', () => {
   it('locks each tag and ignores types when the item has tags', () => {
     const q = query([{ types: ['EventA'], tags: ['tag1', 'tag2'] }]);
@@ -267,6 +280,16 @@ describe('compileAppendLockRequests()', () => {
       mode: 'exclusive',
     });
     expect(taglessType.find((r) => r.key.kind === 'all')?.mode).toBe('shared');
+  });
+
+  it('sorts with compareLockKeyStrings, not localeCompare', () => {
+    const requests = compileAppendLockRequests(
+      queryItem({ tags: ['Z', 'ä'] }),
+      [{ type: 'T', tags: [] }],
+    );
+    const keys = requests.map((r) => lockKeyString(r.key));
+    const sorted = [...keys].sort(compareLockKeyStrings);
+    expect(keys).toEqual(sorted);
   });
 
   it('acquires keys in sorted lockKeyString order', () => {
