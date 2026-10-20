@@ -20,10 +20,8 @@ import {
   compileTailCommittedCursorQuery,
   compileStreamQuery,
   compileCommittedStreamQuery,
-  extractLockPairs,
-  extractLockPairsFromEvents,
-  mergeLockPairs,
-  withWildcardTagLocks,
+  compileAppendLockRequests,
+  lockKeyString,
   compileStreamTagExistsQuery,
   streamTagsFromQuery,
 } from '../query/compiler.js';
@@ -159,21 +157,22 @@ export class PostgresEventStore implements EventStore {
         await client.query("SET LOCAL lock_timeout = '5s'");
         await client.query("SET LOCAL statement_timeout = '30s'");
 
-        const lockPairs = withWildcardTagLocks(
-          mergeLockPairs(
-            extractLockPairs(condition.failIfEventsMatch),
-            extractLockPairsFromEvents(resolved.map((r) => ({ type: r.event.type, tags: r.tags }))),
-          ),
+        const lockRequests = compileAppendLockRequests(
+          condition.failIfEventsMatch,
+          resolved.map((r) => ({ type: r.event.type, tags: r.tags })),
         );
         const acquireLocks = async () => {
-          for (const { type, tag } of lockPairs) {
-            const lockKey = `${type}:${tag}`;
-            await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [lockKey]);
+          for (const request of lockRequests) {
+            const sql =
+              request.mode === 'shared'
+                ? 'SELECT pg_advisory_xact_lock_shared(hashtext($1))'
+                : 'SELECT pg_advisory_xact_lock(hashtext($1))';
+            await client.query(sql, [lockKeyString(request.key)]);
           }
         };
 
         if (hooks !== undefined) {
-          await hooks.runAcquireLocks(lockPairs.length, acquireLocks);
+          await hooks.runAcquireLocks(lockRequests.length, acquireLocks);
         } else {
           await acquireLocks();
         }

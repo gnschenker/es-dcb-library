@@ -1,6 +1,6 @@
 import type { NewEvent } from '../types.js';
 import type { AppendCondition } from '../types.js';
-import { extractLockPairs } from '../query/compiler.js';
+import { extractConditionLockKeys } from '../query/compiler.js';
 
 const MAX_EVENT_TYPES = 20;
 
@@ -19,7 +19,7 @@ export function buildAppendSpanAttributes(
     'dcb.append.has_condition': condition !== undefined,
   };
   if (condition !== undefined) {
-    attrs['dcb.lock.pair_count'] = extractLockPairs(condition.failIfEventsMatch).length;
+    attrs['dcb.lock.pair_count'] = extractConditionLockKeys(condition.failIfEventsMatch).length;
   }
   return attrs;
 }
