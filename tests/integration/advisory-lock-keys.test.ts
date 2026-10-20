@@ -19,6 +19,7 @@ import {
   type StoredEvent,
 } from '../../src/index.js';
 import { applySchema } from '../../src/store/schema.js';
+import { createEventStoreForTests } from '../../src/store/create-event-store-for-tests.js';
 
 const AC6_RUNS = 200;
 
@@ -270,7 +271,7 @@ describe('advisory lock keys (B5 / AC6)', () => {
   }, 60_000);
 
   it('does not block a tagless type condition against a different type', async () => {
-    const overlap = await raceHeldAfterFirstLock(
+    const overlap = await raceHeldAfterAllLocksOverlapping(
       (side) =>
         side === 'A' ? queryItem({ types: ['TypeFoo'] }) : queryItem({ types: ['TypeBar'] }),
       (side) =>
@@ -286,13 +287,13 @@ describe('advisory lock keys (B5 / AC6)', () => {
   }, 60_000);
 
   it('runs disjoint-tag conditional appends in parallel', async () => {
-    const overlap = await raceHeldAfterFirstLock(
+    const overlap = await raceHeldAfterAllLocksOverlapping(
       (side) =>
         side === 'A' ? queryItem({ tags: ['board:B1'] }) : queryItem({ tags: ['board:B2'] }),
       (side) =>
         side === 'A'
-          ? { type: 'ChapterAdded', tags: ['board:B1'] }
-          : { type: 'ChapterAdded', tags: ['board:B2'] },
+          ? { type: 'OnlyA', tags: ['board:B1'] }
+          : { type: 'OnlyB', tags: ['board:B2'] },
     );
 
     expect(overlap.bFinishedWhileAHeld).toBe(true);
@@ -314,15 +315,12 @@ describe('advisory lock keys (B5 / AC6)', () => {
       releaseA = resolve;
     });
 
-    const conditionalStore = new PostgresEventStore({
-      pool,
-      runAcquireLocks: async (pairCount, acquireNext) => {
-        for (let i = 0; i < pairCount; i += 1) {
-          await acquireNext();
-        }
-        afterLocks();
-        await aMayFinish;
-      },
+    const conditionalStore = createEventStoreForTests({ pool }, async (pairCount, acquireNext) => {
+      for (let i = 0; i < pairCount; i += 1) {
+        await acquireNext();
+      }
+      afterLocks();
+      await aMayFinish;
     });
 
     const condPromise = outcomeOf(
@@ -383,8 +381,8 @@ async function raceWithFirstLockHold(
   eventForSide: (side: 'A' | 'B') => { type: string; tags: string[] },
 ): Promise<{ outA: RaceOutcome; outB: RaceOutcome; events: StoredEvent[] }> {
   const runAcquireLocks = createFirstLockHoldScheduler();
-  const storeA = new PostgresEventStore({ pool, runAcquireLocks });
-  const storeB = new PostgresEventStore({ pool, runAcquireLocks });
+  const storeA = createEventStoreForTests({ pool }, runAcquireLocks);
+  const storeB = createEventStoreForTests({ pool }, runAcquireLocks);
 
   const run = async (side: 'A' | 'B', s: PostgresEventStore): Promise<RaceOutcome> => {
     const q = failIfForSide(side);
@@ -417,15 +415,12 @@ async function raceHeldAfterAllLocks(
     releaseA = resolve;
   });
 
-  const storeA = new PostgresEventStore({
-    pool,
-    runAcquireLocks: async (pairCount, acquireNext) => {
-      for (let i = 0; i < pairCount; i += 1) {
-        await acquireNext();
-      }
-      aHasLocks();
-      await aMayFinish;
-    },
+  const storeA = createEventStoreForTests({ pool }, async (pairCount, acquireNext) => {
+    for (let i = 0; i < pairCount; i += 1) {
+      await acquireNext();
+    }
+    aHasLocks();
+    await aMayFinish;
   });
   const storeB = new PostgresEventStore({ pool });
 
@@ -451,8 +446,14 @@ async function raceHeldAfterAllLocks(
   return { outA, outB, events };
 }
 
-/** A holds after the first lock; B is allowed to run to completion before A continues. */
-async function raceHeldAfterFirstLock(
+const B_WHILE_A_HELD_MS = 2_000;
+
+/**
+ * A takes every lock and holds the transaction. B must finish before A is
+ * released — that is the overlap proof. If B blocks on A's exclusive keys,
+ * this rejects instead of hardcoding success.
+ */
+async function raceHeldAfterAllLocksOverlapping(
   failIfForSide: (side: 'A' | 'B') => Query,
   eventForSide: (side: 'A' | 'B') => { type: string; tags: string[] },
 ): Promise<{
@@ -461,25 +462,24 @@ async function raceHeldAfterFirstLock(
   events: StoredEvent[];
   bFinishedWhileAHeld: boolean;
 }> {
-  let aHasFirst!: () => void;
+  let aHasLocks!: () => void;
   const held = new Promise<void>((resolve) => {
-    aHasFirst = resolve;
+    aHasLocks = resolve;
   });
   let releaseA!: () => void;
   const aMayFinish = new Promise<void>((resolve) => {
     releaseA = resolve;
   });
+  let aStillHeld = false;
 
-  const storeA = new PostgresEventStore({
-    pool,
-    runAcquireLocks: async (pairCount, acquireNext) => {
+  const storeA = createEventStoreForTests({ pool }, async (pairCount, acquireNext) => {
+    for (let i = 0; i < pairCount; i += 1) {
       await acquireNext();
-      aHasFirst();
-      await aMayFinish;
-      for (let i = 1; i < pairCount; i += 1) {
-        await acquireNext();
-      }
-    },
+    }
+    aStillHeld = true;
+    aHasLocks();
+    await aMayFinish;
+    aStillHeld = false;
   });
   const storeB = new PostgresEventStore({ pool });
 
@@ -497,10 +497,25 @@ async function raceHeldAfterFirstLock(
 
   const aPromise = run('A', storeA);
   await held;
-  const outB = await run('B', storeB);
-  const bFinishedWhileAHeld = true;
-  releaseA();
-  const outA = await aPromise;
-  const { events } = await store.load(queryAll());
-  return { outA, outB, events, bFinishedWhileAHeld };
+  let bFinishedWhileAHeld = false;
+  try {
+    const outB = await Promise.race([
+      run('B', storeB),
+      new Promise<never>((_, reject) => {
+        setTimeout(
+          () => reject(new Error('B blocked while A held all locks')),
+          B_WHILE_A_HELD_MS,
+        );
+      }),
+    ]);
+    bFinishedWhileAHeld = aStillHeld;
+    releaseA();
+    const outA = await aPromise;
+    const { events } = await store.load(queryAll());
+    return { outA, outB, events, bFinishedWhileAHeld };
+  } catch (err) {
+    releaseA();
+    await aPromise.catch(() => undefined);
+    throw err;
+  }
 }

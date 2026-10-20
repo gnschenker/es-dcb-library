@@ -33,6 +33,7 @@ import type { StreamCursor } from '../types.js';
 import { createObservability, type DcbObservability } from '../observability/index.js';
 import type { ObservabilityConfig } from '../observability/index.js';
 import { createAppendTelemetry, type AppendTelemetry } from '../observability/append-telemetry.js';
+import { getLockScheduler } from './lock-scheduler.js';
 
 export interface EventStoreConfig {
   pool: pg.Pool;
@@ -54,13 +55,6 @@ export interface EventStoreConfig {
    * }
    */
   tagExtractors?: Record<string, TagExtractor | typeof UNTAGGED>;
-  /**
-   * Optional scheduler for advisory-lock acquisition on conditional append.
-   * `acquireNext` takes the next lock in sorted key order. The default calls
-   * it exactly `pairCount` times. Tests use this to hold a transaction open
-   * between locks (same contract as the telemetry `runAcquireLocks` hook).
-   */
-  runAcquireLocks?: (pairCount: number, acquireNext: () => Promise<void>) => Promise<void>;
 }
 
 export class PostgresEventStore implements EventStore {
@@ -68,9 +62,6 @@ export class PostgresEventStore implements EventStore {
   private readonly tagExtractors: Record<string, TagExtractor | typeof UNTAGGED>;
   private readonly observability: DcbObservability;
   private readonly appendTelemetry: AppendTelemetry | undefined;
-  private readonly runAcquireLocks:
-    | ((pairCount: number, acquireNext: () => Promise<void>) => Promise<void>)
-    | undefined;
 
   constructor(config: EventStoreConfig) {
     this.pool = config.pool;
@@ -79,7 +70,6 @@ export class PostgresEventStore implements EventStore {
     this.appendTelemetry = this.observability.enabled
       ? createAppendTelemetry(this.observability)
       : undefined;
-    this.runAcquireLocks = config.runAcquireLocks;
   }
 
   async initializeSchema(): Promise<void> {
@@ -149,7 +139,9 @@ export class PostgresEventStore implements EventStore {
       return run();
     }
     return this.appendTelemetry.runAppend(eventList, condition, async (hooks) => {
-      const stored = await this.appendToDatabase(resolved, condition, hooks);
+      const stored = await this.appendToDatabase(resolved, condition, {
+        wrapAcquire: (pairCount, acquire) => hooks.runAcquireLocks(pairCount, acquire),
+      });
       hooks.onEventsStored(stored);
       return stored;
     });
@@ -158,7 +150,7 @@ export class PostgresEventStore implements EventStore {
   private async appendToDatabase(
     resolved: ResolvedAppendEvent[],
     condition: AppendCondition | undefined,
-    hooks?: { runAcquireLocks: (pairCount: number, acquire: () => Promise<void>) => Promise<void> },
+    hooks?: { wrapAcquire: (pairCount: number, acquire: () => Promise<void>) => Promise<void> },
   ): Promise<StoredEvent[]> {
     const client = await this.pool.connect();
     try {
@@ -177,7 +169,7 @@ export class PostgresEventStore implements EventStore {
           const acquireNext = async () => {
             const request = lockRequests[nextIndex];
             if (request === undefined) {
-              throw new EventStoreError('runAcquireLocks called acquireNext too many times');
+              throw new EventStoreError('lock scheduler called acquireNext too many times');
             }
             nextIndex += 1;
             const sql =
@@ -187,7 +179,7 @@ export class PostgresEventStore implements EventStore {
             await client.query(sql, [lockKeyString(request.key)]);
           };
           const schedule =
-            this.runAcquireLocks ??
+            getLockScheduler(this) ??
             (async (pairCount, next) => {
               for (let i = 0; i < pairCount; i += 1) {
                 await next();
@@ -196,13 +188,13 @@ export class PostgresEventStore implements EventStore {
           await schedule(lockRequests.length, acquireNext);
           if (nextIndex !== lockRequests.length) {
             throw new EventStoreError(
-              `runAcquireLocks acquired ${nextIndex} of ${lockRequests.length} locks`,
+              `lock scheduler acquired ${nextIndex} of ${lockRequests.length} locks`,
             );
           }
         };
 
         if (hooks !== undefined) {
-          await hooks.runAcquireLocks(lockRequests.length, acquireLocks);
+          await hooks.wrapAcquire(lockRequests.length, acquireLocks);
         } else {
           await acquireLocks();
         }
