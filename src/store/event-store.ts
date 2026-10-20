@@ -20,10 +20,8 @@ import {
   compileTailCommittedCursorQuery,
   compileStreamQuery,
   compileCommittedStreamQuery,
-  extractLockPairs,
-  extractLockPairsFromEvents,
-  mergeLockPairs,
-  withWildcardTagLocks,
+  compileAppendLockRequests,
+  lockKeyString,
   compileStreamTagExistsQuery,
   streamTagsFromQuery,
 } from '../query/compiler.js';
@@ -35,6 +33,7 @@ import type { StreamCursor } from '../types.js';
 import { createObservability, type DcbObservability } from '../observability/index.js';
 import type { ObservabilityConfig } from '../observability/index.js';
 import { createAppendTelemetry, type AppendTelemetry } from '../observability/append-telemetry.js';
+import { getLockScheduler } from './lock-scheduler.js';
 
 export interface EventStoreConfig {
   pool: pg.Pool;
@@ -140,7 +139,9 @@ export class PostgresEventStore implements EventStore {
       return run();
     }
     return this.appendTelemetry.runAppend(eventList, condition, async (hooks) => {
-      const stored = await this.appendToDatabase(resolved, condition, hooks);
+      const stored = await this.appendToDatabase(resolved, condition, {
+        wrapAcquire: (pairCount, acquire) => hooks.runAcquireLocks(pairCount, acquire),
+      });
       hooks.onEventsStored(stored);
       return stored;
     });
@@ -149,7 +150,7 @@ export class PostgresEventStore implements EventStore {
   private async appendToDatabase(
     resolved: ResolvedAppendEvent[],
     condition: AppendCondition | undefined,
-    hooks?: { runAcquireLocks: (pairCount: number, acquire: () => Promise<void>) => Promise<void> },
+    hooks?: { wrapAcquire: (pairCount: number, acquire: () => Promise<void>) => Promise<void> },
   ): Promise<StoredEvent[]> {
     const client = await this.pool.connect();
     try {
@@ -159,21 +160,41 @@ export class PostgresEventStore implements EventStore {
         await client.query("SET LOCAL lock_timeout = '5s'");
         await client.query("SET LOCAL statement_timeout = '30s'");
 
-        const lockPairs = withWildcardTagLocks(
-          mergeLockPairs(
-            extractLockPairs(condition.failIfEventsMatch),
-            extractLockPairsFromEvents(resolved.map((r) => ({ type: r.event.type, tags: r.tags }))),
-          ),
+        const lockRequests = compileAppendLockRequests(
+          condition.failIfEventsMatch,
+          resolved.map((r) => ({ type: r.event.type, tags: r.tags })),
         );
         const acquireLocks = async () => {
-          for (const { type, tag } of lockPairs) {
-            const lockKey = `${type}:${tag}`;
-            await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [lockKey]);
+          let nextIndex = 0;
+          const acquireNext = async () => {
+            const request = lockRequests[nextIndex];
+            if (request === undefined) {
+              throw new EventStoreError('lock scheduler called acquireNext too many times');
+            }
+            nextIndex += 1;
+            const sql =
+              request.mode === 'shared'
+                ? 'SELECT pg_advisory_xact_lock_shared(hashtext($1))'
+                : 'SELECT pg_advisory_xact_lock(hashtext($1))';
+            await client.query(sql, [lockKeyString(request.key)]);
+          };
+          const schedule =
+            getLockScheduler(this) ??
+            (async (pairCount, next) => {
+              for (let i = 0; i < pairCount; i += 1) {
+                await next();
+              }
+            });
+          await schedule(lockRequests.length, acquireNext);
+          if (nextIndex !== lockRequests.length) {
+            throw new EventStoreError(
+              `lock scheduler acquired ${nextIndex} of ${lockRequests.length} locks`,
+            );
           }
         };
 
         if (hooks !== undefined) {
-          await hooks.runAcquireLocks(lockPairs.length, acquireLocks);
+          await hooks.wrapAcquire(lockRequests.length, acquireLocks);
         } else {
           await acquireLocks();
         }

@@ -49,7 +49,7 @@ This is a TypeScript event sourcing library implementing the **DCB (Dynamic Cons
 src/query/          Tag-based query API — pure TypeScript, no I/O
   types.ts          Query / QueryItem (OR across items; AND of types/tags within an item)
   builder.ts        query() / queryItem() / queryAll() / combineQueries()
-  compiler.ts       Query → parameterized SQL (committed load/stream/exists) + lock pairs
+  compiler.ts       Query → parameterized SQL (committed load/stream/exists) + lock keys
 
 src/
   types.ts          Public domain types: NewEvent, StoredEvent, LoadResult, AppendCondition, StreamCursor, EventStore
@@ -93,18 +93,19 @@ Items are OR-ed. Within an item, `types` is OR (empty = any type) and `tags` is 
 - `compileExistsQuery` — append condition; includes late-commit holes when `after.readXmin` is set
 - `compileStreamTagExistsQuery` — single-item single-tag cross-type race
 - `compileCommittedStreamQuery` — keyset pagination on `(tx_id, global_position)`
-- `extractLockPairs` / `extractLockPairsFromEvents` / `withWildcardTagLocks` — sorted `(type, tag)` plus `(*, tag)`
+- `extractConditionLockKeys` / `extractEventLockKeys` / `compileAppendLockRequests` — `tag:<t>` / `type:<T>` / `all` (exclusive except event-originated shared `all`), sorted by locale-independent code-unit order
 
 Legacy `compileLoadQuery` / `compileStreamQuery` (global_position order) remain for non-`committedOnly` streams. All use `$N`-style parameterization.
 
 ### Concurrency — advisory locks
 
-Conditional `append()` serializes overlapping writers with **blocking** `pg_advisory_xact_lock(hashtext(type:tag))` on the union of:
-- `(type, tag)` pairs from `failIfEventsMatch`
-- `(type, tag)` pairs from the events being appended
-- `(*, tag)` for each distinct tag
+Conditional `append()` serializes overlapping writers with **blocking** `pg_advisory_xact_lock` / `pg_advisory_xact_lock_shared(hashtext(lockKeyString))` on:
+- `tag:<t>` for each tag on a condition item (type ignored)
+- `type:<T>` for a tagless type item
+- exclusive `all` for a match-all item (`queryAll()`)
+- each appended event: exclusive `tag:<t>` and `type:<T>`, plus shared `all`
 
-Locks are taken in sorted order (deadlock avoidance), then the exists check runs. `ConcurrencyError` means the condition failed, not that the lock was busy. `lock_timeout` / deadlock / serialization failure map to `LockTimeoutError` / `DeadlockError` / `SerializationFailureError`.
+A match-all condition therefore serializes with every other **conditional** writer. Unconditional `append()` takes no DCB locks. Locks are taken in locale-independent UTF-16 code-unit order (deadlock avoidance), then the exists check runs. `ConcurrencyError` means the condition failed, not that the lock was busy. `lock_timeout` / deadlock / serialization failure map to `LockTimeoutError` / `DeadlockError` / `SerializationFailureError`.
 
 Transaction order inside conditional `append()`:
 1. Validate the batch (empty → `EmptyBatchError`; tags/extractors) **before** `BEGIN`

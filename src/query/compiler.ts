@@ -284,94 +284,127 @@ export function compileStreamTagExistsQuery(tag: string, after?: StreamCursor): 
   return { sql, params };
 }
 
-/** Distinct non-empty tags referenced by a query’s lock pairs. */
+/** Distinct non-empty tags referenced by a query’s items. */
 export function streamTagsFromQuery(query: Query): string[] {
-  return [...new Set(extractLockPairs(query).map((p) => p.tag).filter((t) => t !== ''))];
+  return [...new Set(query.items.flatMap((item) => item.tags ?? []).filter((t) => t !== ''))];
 }
 
 /**
- * Extracts all (type, tag) pairs from a Query for locking.
- * Returns pairs in sorted order to prevent deadlocks.
- * 
- * For items with empty types (any type), uses '*' as the type.
- * For items with empty tags, uses '' as the tag.
+ * Advisory-lock identity. Serialized with `lockKeyString` and hashed via `hashtext()`.
+ *
+ * Collision rule: any two transactions must share a key if one transaction’s
+ * appended event could match the other’s `failIfEventsMatch`.
  */
-export function extractLockPairs(query: Query): Array<{ type: string; tag: string }> {
-  const pairs = new Set<string>();
-  
+export type LockKey =
+  | { readonly kind: 'tag'; readonly tag: string }
+  | { readonly kind: 'type'; readonly type: string }
+  | { readonly kind: 'all' };
+
+export type LockMode = 'exclusive' | 'shared';
+
+export interface LockRequest {
+  readonly key: LockKey;
+  readonly mode: LockMode;
+}
+
+/** `tag:<t>` | `type:<T>` | `all` — also the acquire-order sort key. */
+export function lockKeyString(key: LockKey): string {
+  switch (key.kind) {
+    case 'tag':
+      return `tag:${key.tag}`;
+    case 'type':
+      return `type:${key.type}`;
+    case 'all':
+      return 'all';
+  }
+}
+
+/**
+ * Locale-independent UTF-16 code-unit order. `localeCompare` can reorder keys
+ * across processes and create deadlocks.
+ */
+export function compareLockKeyStrings(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+function uniqueSortedKeys(keys: LockKey[]): LockKey[] {
+  const map = new Map<string, LockKey>();
+  for (const key of keys) {
+    map.set(lockKeyString(key), key);
+  }
+  return [...map.values()].sort((a, b) => compareLockKeyStrings(lockKeyString(a), lockKeyString(b)));
+}
+
+/**
+ * Exclusive keys for a condition:
+ * - item with tags → `tag:<t>` for each tag (types ignored)
+ * - item with types and no tags → `type:<T>` for each type
+ * - item with neither (match all) → `all`
+ */
+export function extractConditionLockKeys(query: Query): LockKey[] {
+  const keys: LockKey[] = [];
   for (const item of query.items) {
     const types = item.types ?? [];
     const tags = item.tags ?? [];
-    
-    // If no types specified, lock on '*' (any type)
-    const typesToLock = types.length > 0 ? types : ['*'];
-    
-    // If no tags specified, lock on '' (empty tag)
-    const tagsToLock = tags.length > 0 ? tags : [''];
-    
-    // Cartesian product of types and tags
-    for (const type of typesToLock) {
-      for (const tag of tagsToLock) {
-        pairs.add(JSON.stringify({ type, tag }));
+    if (tags.length > 0) {
+      for (const tag of tags) {
+        keys.push({ kind: 'tag', tag });
       }
+    } else if (types.length > 0) {
+      for (const type of types) {
+        keys.push({ kind: 'type', type });
+      }
+    } else {
+      keys.push({ kind: 'all' });
     }
   }
-  
-  const result = Array.from(pairs).map((s) => JSON.parse(s) as { type: string; tag: string });
-  return sortLockPairs(result);
-}
-
-function sortLockPairs(pairs: Array<{ type: string; tag: string }>): Array<{ type: string; tag: string }> {
-  pairs.sort((a, b) => {
-    const typeCmp = a.type.localeCompare(b.type);
-    return typeCmp !== 0 ? typeCmp : a.tag.localeCompare(b.tag);
-  });
-  return pairs;
+  return uniqueSortedKeys(keys);
 }
 
 /**
- * Lock pairs for events being appended: Cartesian product of event type and each resolved tag.
+ * Keys implied by events being appended: `tag:<t>` for each tag, `type:<T>`, and `all`.
+ * `compileAppendLockRequests` takes `all` in shared mode so only a match-all
+ * condition (exclusive `all`) serializes with every append.
  */
-export function extractLockPairsFromEvents(
-  events: Array<{ type: string; tags: string[] }>,
-): Array<{ type: string; tag: string }> {
-  const pairs = new Set<string>();
-
+export function extractEventLockKeys(events: Array<{ type: string; tags: string[] }>): LockKey[] {
+  const keys: LockKey[] = [];
   for (const event of events) {
-    const tagsToLock = event.tags.length > 0 ? event.tags : [''];
-    for (const tag of tagsToLock) {
-      pairs.add(JSON.stringify({ type: event.type, tag }));
+    for (const tag of event.tags) {
+      keys.push({ kind: 'tag', tag });
     }
+    keys.push({ kind: 'type', type: event.type });
+    keys.push({ kind: 'all' });
   }
-
-  const result = Array.from(pairs).map((s) => JSON.parse(s) as { type: string; tag: string });
-  return sortLockPairs(result);
+  return uniqueSortedKeys(keys);
 }
 
 /**
- * Union of lock pair lists (deduped, sorted).
+ * Union of condition + event lock requests, exclusive except event-originated
+ * `all` (shared). Exclusive wins when a match-all condition also wants `all`.
+ * Sorted by `lockKeyString` to avoid deadlocks.
  */
-export function mergeLockPairs(
-  ...lists: Array<Array<{ type: string; tag: string }>>
-): Array<{ type: string; tag: string }> {
-  const pairs = new Set<string>();
-  for (const list of lists) {
-    for (const pair of list) {
-      pairs.add(JSON.stringify(pair));
-    }
-  }
-  const result = Array.from(pairs).map((s) => JSON.parse(s) as { type: string; tag: string });
-  return sortLockPairs(result);
-}
+export function compileAppendLockRequests(
+  query: Query,
+  events: Array<{ type: string; tags: string[] }>,
+): LockRequest[] {
+  const byKey = new Map<string, LockRequest>();
 
-/**
- * Adds `('*', tag)` for every distinct tag so writers sharing a tag serialize
- * even when their failIfEventsMatch / event types differ.
- */
-export function withWildcardTagLocks(
-  pairs: Array<{ type: string; tag: string }>,
-): Array<{ type: string; tag: string }> {
-  const tags = new Set(pairs.map((p) => p.tag));
-  const wildcards = [...tags].map((tag) => ({ type: '*', tag }));
-  return mergeLockPairs(pairs, wildcards);
+  const add = (key: LockKey, mode: LockMode): void => {
+    const id = lockKeyString(key);
+    const existing = byKey.get(id);
+    if (existing === undefined || (existing.mode === 'shared' && mode === 'exclusive')) {
+      byKey.set(id, { key, mode });
+    }
+  };
+
+  for (const key of extractConditionLockKeys(query)) {
+    add(key, 'exclusive');
+  }
+  for (const key of extractEventLockKeys(events)) {
+    add(key, key.kind === 'all' ? 'shared' : 'exclusive');
+  }
+
+  return [...byKey.values()].sort((a, b) =>
+    compareLockKeyStrings(lockKeyString(a.key), lockKeyString(b.key)),
+  );
 }

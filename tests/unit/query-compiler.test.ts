@@ -3,15 +3,16 @@ import {
   compileLoadQuery,
   compileLoadCommittedQuery,
   compileTailCommittedCursorQuery,
-  mergeLockPairs,
-  withWildcardTagLocks,
-  extractLockPairsFromEvents,
   compileStreamQuery,
   compileCommittedStreamQuery,
   compileExistsQuery,
   compileStreamTagExistsQuery,
   streamTagsFromQuery,
-  extractLockPairs,
+  extractConditionLockKeys,
+  extractEventLockKeys,
+  compileAppendLockRequests,
+  lockKeyString,
+  compareLockKeyStrings,
 } from '../../src/query/compiler.js';
 import { query, queryAll, queryItem } from '../../src/query/builder.js';
 
@@ -170,88 +171,138 @@ describe('compileExistsQuery()', () => {
   });
 });
 
-describe('extractLockPairs()', () => {
-  it('extracts all (type, tag) combinations from query', () => {
-    const q = query([
-      { types: ['EventA'], tags: ['tag1', 'tag2'] },
+describe('compareLockKeyStrings()', () => {
+  it('uses UTF-16 code-unit order, not localeCompare', () => {
+    expect(compareLockKeyStrings('A', 'a')).toBe(-1);
+    expect(compareLockKeyStrings('a', 'A')).toBe(1);
+    expect(compareLockKeyStrings('all', 'all')).toBe(0);
+    expect(compareLockKeyStrings('tag:A', 'tag:a')).toBe(-1);
+    // Would reorder under some locales if localeCompare were used.
+    expect(compareLockKeyStrings('tag:Z', 'tag:ä')).toBe(compareLockKeyStrings('Z', 'ä'));
+    expect(compareLockKeyStrings('tag:Z', 'tag:ä')).toBe('Z' < 'ä' ? -1 : 1);
+  });
+});
+
+describe('extractConditionLockKeys()', () => {
+  it('locks each tag and ignores types when the item has tags', () => {
+    const q = query([{ types: ['EventA'], tags: ['tag1', 'tag2'] }]);
+    expect(extractConditionLockKeys(q)).toEqual([
+      { kind: 'tag', tag: 'tag1' },
+      { kind: 'tag', tag: 'tag2' },
     ]);
-    const pairs = extractLockPairs(q);
-    
-    expect(pairs).toHaveLength(2);
-    expect(pairs).toContainEqual({ type: 'EventA', tag: 'tag1' });
-    expect(pairs).toContainEqual({ type: 'EventA', tag: 'tag2' });
   });
 
-  it('uses "*" for empty types (any type)', () => {
-    const q = queryItem({ tags: ['tag1'] });
-    const pairs = extractLockPairs(q);
-    
-    expect(pairs).toHaveLength(1);
-    expect(pairs[0]).toEqual({ type: '*', tag: 'tag1' });
+  it('locks tag only for a type-wildcard item', () => {
+    const q = queryItem({ tags: ['board:B1'] });
+    expect(extractConditionLockKeys(q)).toEqual([{ kind: 'tag', tag: 'board:B1' }]);
   });
 
-  it('uses "" for empty tags', () => {
-    const q = queryItem({ types: ['EventA'] });
-    const pairs = extractLockPairs(q);
-    
-    expect(pairs).toHaveLength(1);
-    expect(pairs[0]).toEqual({ type: 'EventA', tag: '' });
+  it('locks each type when the item has types and no tags', () => {
+    const q = queryItem({ types: ['EventA', 'EventB'] });
+    expect(extractConditionLockKeys(q)).toEqual([
+      { kind: 'type', type: 'EventA' },
+      { kind: 'type', type: 'EventB' },
+    ]);
   });
 
-  it('handles queryAll (any type, no tags)', () => {
-    const q = queryAll();
-    const pairs = extractLockPairs(q);
-    
-    expect(pairs).toHaveLength(1);
-    expect(pairs[0]).toEqual({ type: '*', tag: '' });
+  it('locks all for queryAll', () => {
+    expect(extractConditionLockKeys(queryAll())).toEqual([{ kind: 'all' }]);
   });
 
-  it('sorts pairs deterministically (type then tag)', () => {
+  it('sorts keys by lockKeyString', () => {
     const q = query([
       { types: ['EventB'], tags: ['z'] },
       { types: ['EventA'], tags: ['b', 'a'] },
     ]);
-    const pairs = extractLockPairs(q);
-    
-    expect(pairs).toEqual([
-      { type: 'EventA', tag: 'a' },
-      { type: 'EventA', tag: 'b' },
-      { type: 'EventB', tag: 'z' },
+    expect(extractConditionLockKeys(q).map(lockKeyString)).toEqual([
+      'tag:a',
+      'tag:b',
+      'tag:z',
     ]);
   });
 
-  it('deduplicates pairs', () => {
+  it('deduplicates keys', () => {
     const q = query([
       { types: ['EventA'], tags: ['tag1'] },
-      { types: ['EventA'], tags: ['tag1'] },
+      { types: ['EventB'], tags: ['tag1'] },
     ]);
-    const pairs = extractLockPairs(q);
-    
-    expect(pairs).toHaveLength(1);
-    expect(pairs[0]).toEqual({ type: 'EventA', tag: 'tag1' });
-  });
-
-  it('handles multiple types and tags (Cartesian product)', () => {
-    const q = queryItem({ types: ['A', 'B'], tags: ['t1', 't2'] });
-    const pairs = extractLockPairs(q);
-
-    expect(pairs).toHaveLength(4);
-    expect(pairs).toContainEqual({ type: 'A', tag: 't1' });
-    expect(pairs).toContainEqual({ type: 'A', tag: 't2' });
-    expect(pairs).toContainEqual({ type: 'B', tag: 't1' });
-    expect(pairs).toContainEqual({ type: 'B', tag: 't2' });
+    expect(extractConditionLockKeys(q)).toEqual([{ kind: 'tag', tag: 'tag1' }]);
   });
 });
 
-describe('mergeLockPairs()', () => {
-  it('unions query and event lock pairs', () => {
-    const fromQuery = extractLockPairs(queryItem({ types: ['EventAlpha'], tags: ['t'] }));
-    const fromEvents = extractLockPairsFromEvents([{ type: 'EventBeta', tags: ['t'] }]);
-    const merged = mergeLockPairs(fromQuery, fromEvents);
+describe('extractEventLockKeys()', () => {
+  it('locks each tag, the event type, and all', () => {
+    expect(extractEventLockKeys([{ type: 'ChapterAdded', tags: ['board:B1'] }])).toEqual([
+      { kind: 'all' },
+      { kind: 'tag', tag: 'board:B1' },
+      { kind: 'type', type: 'ChapterAdded' },
+    ]);
+  });
 
-    expect(merged).toEqual([
-      { type: 'EventAlpha', tag: 't' },
-      { type: 'EventBeta', tag: 't' },
+  it('still locks type and all for an untagged event', () => {
+    expect(extractEventLockKeys([{ type: 'SystemEvent', tags: [] }])).toEqual([
+      { kind: 'all' },
+      { kind: 'type', type: 'SystemEvent' },
+    ]);
+  });
+});
+
+describe('compileAppendLockRequests()', () => {
+  it('shares tag:board:B1 for *:board vs ChapterAdded:board', () => {
+    const wildcard = compileAppendLockRequests(queryItem({ tags: ['board:B1'] }), [
+      { type: 'ChapterAdded', tags: ['board:B1'] },
+    ]);
+    const typed = compileAppendLockRequests(
+      queryItem({ types: ['ChapterAdded'], tags: ['board:B1'] }),
+      [{ type: 'ChapterAdded', tags: ['board:B1'] }],
+    );
+
+    expect(wildcard).toContainEqual({ key: { kind: 'tag', tag: 'board:B1' }, mode: 'exclusive' });
+    expect(typed).toContainEqual({ key: { kind: 'tag', tag: 'board:B1' }, mode: 'exclusive' });
+    expect(wildcard.find((r) => r.key.kind === 'all')?.mode).toBe('shared');
+    expect(typed.find((r) => r.key.kind === 'all')?.mode).toBe('shared');
+  });
+
+  it('takes exclusive all for a match-all condition and exclusive type for a tagless type item', () => {
+    const matchAll = compileAppendLockRequests(queryAll(), [
+      { type: 'Anything', tags: ['other:x'] },
+    ]);
+    const taglessType = compileAppendLockRequests(queryItem({ types: ['ChapterAdded'] }), [
+      { type: 'ChapterAdded', tags: ['board:B1'] },
+    ]);
+
+    expect(matchAll.find((r) => r.key.kind === 'all')).toEqual({
+      key: { kind: 'all' },
+      mode: 'exclusive',
+    });
+    expect(taglessType).toContainEqual({
+      key: { kind: 'type', type: 'ChapterAdded' },
+      mode: 'exclusive',
+    });
+    expect(taglessType.find((r) => r.key.kind === 'all')?.mode).toBe('shared');
+  });
+
+  it('sorts with compareLockKeyStrings, not localeCompare', () => {
+    const requests = compileAppendLockRequests(
+      queryItem({ tags: ['Z', 'ä'] }),
+      [{ type: 'T', tags: [] }],
+    );
+    const keys = requests.map((r) => lockKeyString(r.key));
+    const sorted = [...keys].sort(compareLockKeyStrings);
+    expect(keys).toEqual(sorted);
+  });
+
+  it('acquires keys in sorted lockKeyString order', () => {
+    const requests = compileAppendLockRequests(
+      queryItem({ types: ['TypeZ'], tags: ['tag-high', 'extra-a'] }),
+      [{ type: 'TypeA', tags: ['tag-low'] }],
+    );
+    expect(requests.map((r) => lockKeyString(r.key))).toEqual([
+      'all',
+      'tag:extra-a',
+      'tag:tag-high',
+      'tag:tag-low',
+      'type:TypeA',
     ]);
   });
 });
@@ -272,18 +323,7 @@ describe('compileStreamTagExistsQuery()', () => {
 });
 
 describe('streamTagsFromQuery()', () => {
-  it('returns distinct tags from lock pairs', () => {
+  it('returns distinct tags from query items', () => {
     expect(streamTagsFromQuery(queryItem({ types: ['A'], tags: ['t1', 't2'] }))).toEqual(['t1', 't2']);
-  });
-});
-
-describe('withWildcardTagLocks()', () => {
-  it('adds (*, tag) for each distinct tag', () => {
-    const merged = mergeLockPairs(
-      extractLockPairs(queryItem({ types: ['EventAlpha'], tags: ['t'] })),
-      extractLockPairsFromEvents([{ type: 'EventBeta', tags: ['t'] }]),
-    );
-    const locked = withWildcardTagLocks(merged);
-    expect(locked).toContainEqual({ type: '*', tag: 't' });
   });
 });

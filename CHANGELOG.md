@@ -5,6 +5,12 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.1] - 2026-10-20
+
+### Fixed
+
+- Advisory locks now key by tag (type ignored), by type when a condition has no tags, and by a global `all` key for match-all conditions. Each appended event takes exclusive tag and type locks plus a shared `all` lock (`pg_advisory_xact_lock_shared`). Writers whose conditions are written differently (for example `*:board:B1` vs `ChapterAdded:board:B1`) serialize, and a tagless type condition or `queryAll()` now collides with any matching append. A match-all condition takes exclusive `all`, so it serializes with every other **conditional** writer (unconditional `append()` still takes no DCB locks). Lock keys are acquired in locale-independent UTF-16 code-unit order.
+
 ## [1.0.0] - 2026-10-12
 
 First stable release aligned with the [DCB specification](https://dcb.events).
@@ -39,4 +45,5 @@ First stable release aligned with the [DCB specification](https://dcb.events).
 
 - Payload-key query compiler and related builder types from 0.1.0.
 
+[1.0.1]: https://github.com/gnschenker/es-dcb-library/releases/tag/v1.0.1
 [1.0.0]: https://github.com/gnschenker/es-dcb-library/releases/tag/v1.0.0
