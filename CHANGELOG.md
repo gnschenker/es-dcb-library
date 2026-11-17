@@ -5,6 +5,23 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0] - 2026-11-17
+
+### Changed
+
+- **Breaking**: A conditional `append()` now fails only when an event matching `failIfEventsMatch` — its types **and** tags — exists after `after`, as the [DCB specification](https://dcb.events) defines. Version 1.0.1 additionally rejected a single-item, single-tag condition whenever *any* event carrying that tag, of any type, followed `after`. Appends that 1.0.1 rejected for that reason now succeed.
+
+  **Migration:** if your decision reads more event types than your condition lists (for example you `load(queryItem({ tags: [t] }))` but pass `queryItem({ types: ['X'], tags: [t] })` as the condition), pass the query you loaded as the condition. That was always the contract; 1.0.1 partly masked the mistake for single-tag conditions.
+
+### Fixed
+
+- A typed single-tag condition could be blocked **permanently**: `load()` returns the position of the last *matching* event, so one event of another type with the same tag stored after it made every later conditional append fail with `ConcurrencyError`, however often it was retried.
+- Writers whose conditions share a tag but not event types no longer conflict with each other when neither appended event matches the other's condition (spurious `ConcurrencyError`).
+
+### Tests
+
+- The cross-type race tests now assert DCB semantics: a writer whose appended event matches another writer's condition can only succeed alongside it if it committed later; independent decisions on one tag both succeed. Added regression tests for the permanent-block case.
+
 ## [1.0.1] - 2026-10-20
 
 ### Fixed
@@ -45,5 +62,6 @@ First stable release aligned with the [DCB specification](https://dcb.events).
 
 - Payload-key query compiler and related builder types from 0.1.0.
 
+[2.0.0]: https://github.com/gnschenker/es-dcb-library/releases/tag/v2.0.0
 [1.0.1]: https://github.com/gnschenker/es-dcb-library/releases/tag/v1.0.1
 [1.0.0]: https://github.com/gnschenker/es-dcb-library/releases/tag/v1.0.0

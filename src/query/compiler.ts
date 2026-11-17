@@ -254,42 +254,6 @@ export function compileExistsQuery(
 }
 
 /**
- * Any row with `tags @> {tag}` that invalidates the append cursor on the shared tag stream.
- * Uses `global_position` ordering (not `(tx_id, global_position)`), so multi-clause loads
- * are not confused by tuple ordering across unrelated types on the same tag.
- */
-export function compileStreamTagExistsQuery(tag: string, after?: StreamCursor): CompiledQuery {
-  const params: unknown[] = [[tag]];
-  const counter = { n: 1 };
-
-  let positionClause = '';
-  if (after !== undefined) {
-    params.push(after.globalPosition);
-    counter.n += 1;
-    const afterPosRef = `$${counter.n}`;
-    // Position-only: avoids false conflicts on multi-tag loads (tuple / xmin holes stay on failIf exists).
-    positionClause = ` AND global_position > ${afterPosRef}`;
-  }
-
-  const sql = [
-    'SELECT EXISTS (',
-    '  SELECT 1',
-    '  FROM events',
-    '  WHERE tags @> $1',
-    `${positionClause}`,
-    '  LIMIT 1',
-    ') AS exists',
-  ].join('\n');
-
-  return { sql, params };
-}
-
-/** Distinct non-empty tags referenced by a query’s items. */
-export function streamTagsFromQuery(query: Query): string[] {
-  return [...new Set(query.items.flatMap((item) => item.tags ?? []).filter((t) => t !== ''))];
-}
-
-/**
  * Advisory-lock identity. Serialized with `lockKeyString` and hashed via `hashtext()`.
  *
  * Collision rule: any two transactions must share a key if one transaction’s
