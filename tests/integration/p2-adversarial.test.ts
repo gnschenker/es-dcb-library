@@ -16,6 +16,7 @@ import {
   InconsistentStreamCursorError,
   MissingTagExtractorError,
   type Query,
+  type StoredEvent,
 } from '../../src/index.js';
 import { applySchema } from '../../src/store/schema.js';
 
@@ -61,7 +62,7 @@ afterAll(async () => {
 async function raceConditionalWriters(
   failIfForSide: (side: 'A' | 'B') => Query,
   eventForSide: (side: 'A' | 'B') => { type: string; tags: string[] },
-): Promise<{ outA: string; outB: string; count: number }> {
+): Promise<{ outA: string; outB: string; count: number; events: StoredEvent[] }> {
   let ready = 0;
   let release!: () => void;
   const barrier = new Promise<void>((resolve) => {
@@ -89,7 +90,7 @@ async function raceConditionalWriters(
 
   const [outA, outB] = await Promise.all([run('A'), run('B')]);
   const { events } = await store.load(queryAll());
-  return { outA, outB, count: events.length };
+  return { outA, outB, count: events.length, events };
 }
 
 describe('P2 #8 — overlapping dynamic predicates', () => {
@@ -108,20 +109,30 @@ describe('P2 #8 — overlapping dynamic predicates', () => {
   }, 60_000);
 
   it('serializes a wildcard-tag condition against a typed condition on the same tag', async () => {
-    const { outA, outB, count } = await raceConditionalWriters(
-      (side) =>
-        side === 'A'
-          ? queryItem({ tags: [SHARED] })
-          : queryItem({ types: ['Typed'], tags: [SHARED] }),
-      (side) =>
-        side === 'A'
-          ? { type: 'Wildcard', tags: [SHARED] }
-          : { type: 'Typed', tags: [SHARED] },
-    );
+    // B's Typed event matches A's wildcard condition; A's Wildcard event does not match B's.
+    // So B always succeeds, and A may only succeed if its event committed before B's.
+    for (let round = 0; round < 5; round++) {
+      await resetDatabase();
+      const { outA, outB, events } = await raceConditionalWriters(
+        (side) =>
+          side === 'A'
+            ? queryItem({ tags: [SHARED] })
+            : queryItem({ types: ['Typed'], tags: [SHARED] }),
+        (side) =>
+          side === 'A'
+            ? { type: 'Wildcard', tags: [SHARED] }
+            : { type: 'Typed', tags: [SHARED] },
+      );
 
-    expect([outA, outB].includes('error')).toBe(false);
-    expect([outA, outB].filter((o) => o === 'success')).toHaveLength(1);
-    expect(count).toBe(1);
+      expect([outA, outB].includes('error')).toBe(false);
+      expect(outB).toBe('success');
+      if (outA === 'success') {
+        const position = (type: string) => events.find((e) => e.type === type)!.globalPosition;
+        expect(position('Wildcard')).toBeLessThan(position('Typed'));
+      } else {
+        expect(outA).toBe('conflict');
+      }
+    }
   }, 60_000);
 
   it('lets concurrent writers on disjoint tags both succeed', async () => {

@@ -59,7 +59,9 @@ await store.append(evt, { failIfEventsMatch: q, after: STREAM_CURSOR_ORIGIN });
 
 `append()` now locks the **union** of `(type, tag)` pairs from `failIfEventsMatch` **and** from the events being appended (resolved tags), plus **`(*, tag)`** for each distinct tag (serializes writers on the same tag even when event types differ).
 
-When `failIfEventsMatch` is a **single item on one tag**, append also checks for any row with that tag and `global_position > after.globalPosition` (cross-type races). Multi-item or multi-tag conditions use typed `failIfEventsMatch` + locks only. Late-commit holes use `readXmin` on the typed exists check.
+The condition check looks only at events matching `failIfEventsMatch` (its types **and** tags) after `after`; late-commit holes use `readXmin` on that check. Cross-type races are prevented by the locks above: a writer whose appended event matches another writer's condition always shares a lock with it.
+
+> **2.0.0:** 1.0.1 also rejected a single-item, single-tag condition when *any* event with that tag (of any type) followed `after`. That check was removed — see the 2.0.0 entry in `CHANGELOG.md`.
 
 Locks are **blocking** `pg_advisory_xact_lock` (sorted to avoid deadlock). A wait that exceeds `lock_timeout` is `LockTimeoutError`, not `ConcurrencyError`.
 

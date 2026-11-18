@@ -22,8 +22,6 @@ import {
   compileCommittedStreamQuery,
   compileAppendLockRequests,
   lockKeyString,
-  compileStreamTagExistsQuery,
-  streamTagsFromQuery,
 } from '../query/compiler.js';
 import { resolveAppendEvents, type ResolvedAppendEvent } from './resolve-event-tags.js';
 import { applySchema } from './schema.js';
@@ -321,25 +319,11 @@ export class PostgresEventStore implements EventStore {
     client: pg.PoolClient,
     condition: AppendCondition,
   ): Promise<boolean> {
+    // DCB: the condition fails only if an event matching failIfEventsMatch (types AND tags)
+    // exists after the cursor. Cross-type races are prevented by the advisory locks
+    // (condition ∪ appended events), not by widening the check beyond the query.
     const { sql, params } = compileExistsQuery(condition.failIfEventsMatch, condition.after);
     const failIfResult = await client.query<{ exists: boolean }>(sql, params as unknown[]);
-    if (failIfResult.rows[0]!.exists) {
-      return true;
-    }
-
-    const streamTags = streamTagsFromQuery(condition.failIfEventsMatch);
-    // Cross-type races on one tag (single-item failIf): any event on that tag after the cursor.
-    // Multi-item / multi-tag conditions use typed failIf + locks only.
-    if (streamTags.length === 1 && condition.failIfEventsMatch.items.length === 1) {
-      const tagExists = compileStreamTagExistsQuery(streamTags[0]!, condition.after);
-      const tagResult = await client.query<{ exists: boolean }>(
-        tagExists.sql,
-        tagExists.params as unknown[],
-      );
-      if (tagResult.rows[0]!.exists) {
-        return true;
-      }
-    }
-    return false;
+    return failIfResult.rows[0]!.exists;
   }
 }

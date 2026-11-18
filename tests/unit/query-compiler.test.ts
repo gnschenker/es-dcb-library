@@ -6,8 +6,6 @@ import {
   compileStreamQuery,
   compileCommittedStreamQuery,
   compileExistsQuery,
-  compileStreamTagExistsQuery,
-  streamTagsFromQuery,
   extractConditionLockKeys,
   extractEventLockKeys,
   compileAppendLockRequests,
@@ -304,26 +302,5 @@ describe('compileAppendLockRequests()', () => {
       'tag:tag-low',
       'type:TypeA',
     ]);
-  });
-});
-
-describe('compileStreamTagExistsQuery()', () => {
-  it('uses global_position for tag stream invalidation', () => {
-    const { sql, params } = compileStreamTagExistsQuery('my-tag', {
-      txId: '1',
-      globalPosition: 5n,
-      readXmin: '99',
-    });
-    expect(sql).toContain('tags @> $1');
-    expect(sql).toContain('global_position > $2');
-    expect(sql).not.toContain('readXmin');
-    expect(sql).not.toContain('tx_id, global_position');
-    expect(params).toEqual([['my-tag'], 5n]);
-  });
-});
-
-describe('streamTagsFromQuery()', () => {
-  it('returns distinct tags from query items', () => {
-    expect(streamTagsFromQuery(queryItem({ types: ['A'], tags: ['t1', 't2'] }))).toEqual(['t1', 't2']);
   });
 });

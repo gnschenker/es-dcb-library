@@ -91,7 +91,6 @@ Items are OR-ed. Within an item, `types` is OR (empty = any type) and `tags` is 
 `compiler.ts` (committed path used by the store):
 - `compileLoadCommittedQuery` — `SELECT ... WHERE … AND tx_id < pg_snapshot_xmin(...) ORDER BY tx_id, global_position`
 - `compileExistsQuery` — append condition; includes late-commit holes when `after.readXmin` is set
-- `compileStreamTagExistsQuery` — single-item single-tag cross-type race
 - `compileCommittedStreamQuery` — keyset pagination on `(tx_id, global_position)`
 - `extractConditionLockKeys` / `extractEventLockKeys` / `compileAppendLockRequests` — `tag:<t>` / `type:<T>` / `all` (exclusive except event-originated shared `all`), sorted by locale-independent code-unit order
 
@@ -111,7 +110,7 @@ Transaction order inside conditional `append()`:
 1. Validate the batch (empty → `EmptyBatchError`; tags/extractors) **before** `BEGIN`
 2. `BEGIN` then `SET LOCAL lock_timeout = '5s'` / `SET LOCAL statement_timeout = '30s'`
 3. Acquire advisory locks
-4. `failIfEventsMatch` exists check (plus tag-stream exists when the condition is one item / one tag)
+4. `failIfEventsMatch` exists check — types **and** tags of the condition, nothing wider (cross-type races are handled by the locks in step 3)
 5. `INSERT ... RETURNING` for each event
 6. `COMMIT` — every failure after `BEGIN` rolls back in a `finally`-safe path
 
